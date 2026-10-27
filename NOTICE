@@ -1,0 +1,49 @@
+FGO Patcher — third-party notices
+=================================
+
+This project bundles the following third-party software. Full license texts are in LICENSE
+and in each project's own repository.
+
+Morphe Patcher  (app.morphe:morphe-patcher)
+    https://github.com/MorpheApp/morphe-patcher
+    License: GNU General Public License v3.0 (GPL-3.0), with additional terms under
+    GPLv3 Section 7 (attribution; name and branding restrictions — "Morphe" may not be used
+    as the branding/name of derivative works). Derivative works must keep these notices and
+    use their own distinct branding.
+    NOTE: This application links/bundles Morphe Patcher and is therefore distributed under
+    the GPLv3.
+
+smali / baksmali / dexlib2  (com.github.MorpheApp.smali:*)
+    https://github.com/google/smali (forked by Morphe)
+    License: BSD-3-Clause
+
+ARSCLib  (com.github.REAndroid:arsclib)
+    https://github.com/REAndroid/ARSCLib
+    License: Apache-2.0
+
+apkzlib / apksig  (com.android.tools.build:*)
+    https://android.googlesource.com/platform/tools/base
+    License: Apache-2.0
+
+Guava  (com.google.guava:guava)
+    https://github.com/google/guava
+    License: Apache-2.0
+
+Bouncy Castle  (org.bouncycastle:bcpkix-jdk18on)
+    https://www.bouncycastle.org/
+    License: MIT-style
+
+Kotlin (org.jetbrains.kotlin:*) and kotlinx (coroutines, serialization)
+    https://kotlinlang.org/
+    License: Apache-2.0
+
+AndroidX / Jetpack Compose  (androidx.*)
+    https://developer.android.com/jetpack/androidx
+    License: Apache-2.0
+
+NOT INCLUDED
+------------
+
+libavalon.so — the mod hook library used at runtime is proprietary to Rayshift.io
+(BetterFGO). It is deliberately NOT bundled with this project; the user supplies it by
+importing an existing BetterFGO APK. It is not covered by this project's license.

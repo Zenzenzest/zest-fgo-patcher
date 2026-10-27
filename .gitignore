@@ -1,0 +1,30 @@
+# Build output
+build/
+.gradle/
+.kotlin/
+.idea/
+*.iml
+local.properties
+
+# Secrets / signing (never commit)
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+*.asc
+
+# Binaries / game files (never commit)
+*.apk
+*.xapk
+*.apks
+*.apkm
+*.mpp
+*.so
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Our own hook binary ships with the app.
+!app/src/main/assets/fgo/hook/**/*.so
