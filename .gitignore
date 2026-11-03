@@ -31,3 +31,7 @@ Thumbs.db
 
 # SDD workspace
 .superpowers/
+
+# Native build output
+fgohook/build-*/
+fgohook/out/
