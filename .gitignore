@@ -28,3 +28,6 @@ Thumbs.db
 
 # Our own hook binary ships with the app.
 !app/src/main/assets/fgo/hook/**/*.so
+
+# SDD workspace
+.superpowers/
