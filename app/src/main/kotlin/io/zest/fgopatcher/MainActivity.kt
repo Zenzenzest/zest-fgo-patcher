@@ -829,7 +829,11 @@ private fun queryName(ctx: Context, uri: Uri): String? =
 
 private fun sign(ctx: Context, unsigned: File, work: File, outputName: String): File {
     // Per-user key: generated once and kept in the app's private storage.
-    val keystore = File(ctx.filesDir, "signing/patcher.keystore")
+    // Test builds use a separate key too, so they are fully independent from
+    // the production io.zest.betterfgo.* installs.
+    val keystoreName = if (FgoPatch.TEST_BUILD) "signing/patcher-test.keystore"
+                       else "signing/patcher.keystore"
+    val keystore = File(ctx.filesDir, keystoreName)
     if (!keystore.exists()) {
         keystore.parentFile?.mkdirs()
         val pair = ApkSigner.newPrivateKeyCertificatePair(

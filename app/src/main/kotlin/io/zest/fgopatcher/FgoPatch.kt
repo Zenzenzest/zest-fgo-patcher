@@ -43,9 +43,28 @@ object FgoPatch {
 
     val SUPPORTED_ABIS = listOf("arm64-v8a", "armeabi-v7a")
 
+    /**
+     * Temporary test build: output io.zest.test.betterfgo.* so the result
+     * installs alongside the real io.zest.betterfgo.* app instead of replacing
+     * it. Flip to false for release builds.
+     */
+    const val TEST_BUILD = true
+    private val testInfix = if (TEST_BUILD) "test." else ""
+    private val testLabel = if (TEST_BUILD) " (test)" else ""
+
     val VARIANTS = listOf(
-        FgoVariant("com.aniplex.fategrandorder.en", "io.zest.betterfgo.en", "FGO EN", "en"),
-        FgoVariant("com.aniplex.fategrandorder", "io.zest.betterfgo", "FGO JP", "jp"),
+        FgoVariant(
+            "com.aniplex.fategrandorder.en",
+            "io.zest.${testInfix}betterfgo.en",
+            "FGO EN$testLabel",
+            "en",
+        ),
+        FgoVariant(
+            "com.aniplex.fategrandorder",
+            "io.zest.${testInfix}betterfgo",
+            "FGO JP$testLabel",
+            "jp",
+        ),
     )
 
     fun variantOf(packageName: String): FgoVariant? =
