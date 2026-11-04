@@ -248,6 +248,36 @@ void* hook_get_string_value_instance(void* self, void* a1, void* a2, void* a3, v
     return replace_il2cpp_string(result);
 }
 
+// --- Telemetry blockers -----------------------------------------------------
+// Each replacement ignores its arguments and returns null. The hooked methods
+// are void/bool/string-returning; null maps to "nothing happened"/false.
+#define DEFINE_BLOCK_HOOK(fn, label)      \
+    void* fn() {                          \
+        static bool logged = false;       \
+        if (!logged) {                    \
+            LOGI("Blocked %s.", label);   \
+            logged = true;                \
+        }                                 \
+        return nullptr;                   \
+    }
+
+DEFINE_BLOCK_HOOK(block_firebase_initialize, "FirebaseScript Initialise")
+DEFINE_BLOCK_HOOK(block_setup_appcheck, "SetupAppCheckProvider")
+DEFINE_BLOCK_HOOK(block_get_appcheck_error, "get_AppCheckTokenError")
+DEFINE_BLOCK_HOOK(block_set_appcheck_error, "set_AppCheckTokenError")
+DEFINE_BLOCK_HOOK(block_bt_set_attributes, "backtrace SetAttributes")
+DEFINE_BLOCK_HOOK(block_bt_startup, "backtrace startup")
+DEFINE_BLOCK_HOOK(block_bt_disable_sampling, "backtrace DisableSampling")
+DEFINE_BLOCK_HOOK(block_bt_enable_sampling, "backtrace EnableSampling")
+DEFINE_BLOCK_HOOK(block_bt_disable, "backtrace Disable")
+DEFINE_BLOCK_HOOK(block_bt_enable, "backtrace Enable")
+DEFINE_BLOCK_HOOK(block_crashlytics_key, "Crashlytics AddCustomKey")
+DEFINE_BLOCK_HOOK(block_repro_init, "ReproNotification initialize")
+DEFINE_BLOCK_HOOK(block_repro_user_id, "ReproNotification SetUserId")
+DEFINE_BLOCK_HOOK(block_repro_friend_code, "ReproNotification SetFriendCode")
+DEFINE_BLOCK_HOOK(block_repro_track, "ReproNotification TrackEvent")
+DEFINE_BLOCK_HOOK(block_repro_push, "ReproNotification SetPushRegistrationId")
+
 Il2CppClass* find_class(Il2CppDomain domain, const char* name_space, const char* name) {
     size_t count = 0;
     const Il2CppAssembly** assemblies = p_domain_get_assemblies(domain, &count);
@@ -259,6 +289,62 @@ Il2CppClass* find_class(Il2CppDomain domain, const char* name_space, const char*
         if (klass != nullptr) return klass;
     }
     return nullptr;
+}
+
+struct BlockSpec {
+    const char* klass;
+    const char* method;
+    void* replacement;
+};
+
+const BlockSpec kBlockSpecs[] = {
+    {"FirebaseScript", "Initialize", reinterpret_cast<void*>(block_firebase_initialize)},
+    {"FirebaseScript", "Initialise", reinterpret_cast<void*>(block_firebase_initialize)},
+    {"FirebaseScript", "SetupAppCheckProvider", reinterpret_cast<void*>(block_setup_appcheck)},
+    {"FirebaseScript", "get_AppCheckTokenError", reinterpret_cast<void*>(block_get_appcheck_error)},
+    {"FirebaseScript", "set_AppCheckTokenError", reinterpret_cast<void*>(block_set_appcheck_error)},
+    {"CrashReporter", "BacktraceSetAttributes", reinterpret_cast<void*>(block_bt_set_attributes)},
+    {"CrashReporter", "BacktraceStartUp", reinterpret_cast<void*>(block_bt_startup)},
+    {"CrashReporter", "BacktraceDisableSampling", reinterpret_cast<void*>(block_bt_disable_sampling)},
+    {"CrashReporter", "BacktraceEnableSampling", reinterpret_cast<void*>(block_bt_enable_sampling)},
+    {"CrashReporter", "BacktraceDisable", reinterpret_cast<void*>(block_bt_disable)},
+    {"CrashReporter", "BacktraceEnable", reinterpret_cast<void*>(block_bt_enable)},
+    {"CrashReporter", "CrashlyticsAddCustomKey", reinterpret_cast<void*>(block_crashlytics_key)},
+    {"AdManager", "InitializeRepro", reinterpret_cast<void*>(block_repro_init)},
+    {"AdManager", "SetUserId", reinterpret_cast<void*>(block_repro_user_id)},
+    {"AdManager", "SetFriendCode", reinterpret_cast<void*>(block_repro_friend_code)},
+    {"AdManager", "TrackEvent", reinterpret_cast<void*>(block_repro_track)},
+    {"AdManager", "SendPushRegistrationId", reinterpret_cast<void*>(block_repro_push)},
+    {"AdManager", "SetPushRegistrationId", reinterpret_cast<void*>(block_repro_push)},
+};
+
+void install_telemetry(Il2CppDomain domain) {
+    for (const BlockSpec& spec : kBlockSpecs) {
+        Il2CppClass* klass = find_class(domain, "", spec.klass);
+        if (klass == nullptr) {
+            LOGE("failed to resolve %s", spec.klass);
+            continue;
+        }
+        MethodInfo* method = nullptr;
+        for (int argc = 0; argc <= 6 && method == nullptr; ++argc) {
+            method = p_class_get_method_from_name(klass, spec.method, argc);
+        }
+        if (method == nullptr) {
+            LOGE("failed to resolve %s::%s", spec.klass, spec.method);
+            continue;
+        }
+        void* fn = method_ptr(method);
+        if (fn == nullptr) {
+            LOGE("failed to resolve %s::%s", spec.klass, spec.method);
+            continue;
+        }
+        void* original = nullptr;
+        if (DobbyHook(fn, spec.replacement, &original) == 0) {
+            LOGI("hooked %s::%s", spec.klass, spec.method);
+        } else {
+            LOGE("failed to hook %s::%s", spec.klass, spec.method);
+        }
+    }
 }
 
 /**
@@ -439,6 +525,8 @@ void resolve_and_hook() {
     g_stop_voice_fn = stop_voice_ptr;
     g_on_finish_voice = on_finish_voice;
     g_on_finish_voice_fn = on_finish_voice_ptr;
+
+    install_telemetry(domain);
 
     LOGI("hooks installed");
 }
