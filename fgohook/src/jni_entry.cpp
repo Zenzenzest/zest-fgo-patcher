@@ -34,6 +34,11 @@ typedef uint32_t (*fn_method_get_flags_t)(const MethodInfo*, uint32_t*);
 typedef void* (*fn_string_new_t)(const char*);
 typedef uint16_t* (*fn_string_chars_t)(void*);
 typedef int32_t (*fn_string_length_t)(void*);
+typedef size_t (*fn_image_get_class_count_t)(const Il2CppImage*);
+typedef Il2CppClass* (*fn_image_get_class_t)(const Il2CppImage*, size_t);
+typedef void* (*fn_class_get_methods_t)(Il2CppClass*, void**);
+typedef const char* (*fn_method_get_name_t)(void*);
+typedef const char* (*fn_class_get_name_t)(Il2CppClass*);
 typedef void* (*fn_init_t)(const char* domain_name);
 
 fn_domain_get_t p_domain_get = nullptr;
@@ -45,6 +50,11 @@ fn_method_get_flags_t p_method_get_flags = nullptr;
 fn_string_new_t p_string_new = nullptr;
 fn_string_chars_t p_string_chars = nullptr;
 fn_string_length_t p_string_length = nullptr;
+fn_image_get_class_count_t p_image_get_class_count = nullptr;
+fn_image_get_class_t p_image_get_class = nullptr;
+fn_class_get_methods_t p_class_get_methods = nullptr;
+fn_method_get_name_t p_method_get_name = nullptr;
+fn_class_get_name_t p_class_get_name = nullptr;
 
 fn_init_t orig_il2cpp_init = nullptr;
 volatile int g_resolved = 0;
@@ -291,6 +301,44 @@ Il2CppClass* find_class(Il2CppDomain domain, const char* name_space, const char*
     return nullptr;
 }
 
+MethodInfo* find_method_anywhere(Il2CppDomain domain, const char* method_name, Il2CppClass** owner) {
+    if (owner != nullptr) *owner = nullptr;
+    if (p_image_get_class_count == nullptr || p_image_get_class == nullptr ||
+        p_class_get_methods == nullptr || p_method_get_name == nullptr) {
+        return nullptr;
+    }
+
+    size_t assembly_count = 0;
+    const Il2CppAssembly** assemblies = p_domain_get_assemblies(domain, &assembly_count);
+    if (assemblies == nullptr) return nullptr;
+
+    for (size_t a = 0; a < assembly_count; ++a) {
+        Il2CppImage* image = p_assembly_get_image(assemblies[a]);
+        if (image == nullptr) continue;
+        const size_t class_count = p_image_get_class_count(image);
+        for (size_t i = 0; i < class_count; ++i) {
+            Il2CppClass* klass = p_image_get_class(image, i);
+            if (klass == nullptr) continue;
+            void* iter = nullptr;
+            void* method = nullptr;
+            while ((method = p_class_get_methods(klass, &iter)) != nullptr) {
+                const char* name = p_method_get_name(method);
+                if (name != nullptr && strcmp(name, method_name) == 0) {
+                    if (owner != nullptr) *owner = klass;
+                    return reinterpret_cast<MethodInfo*>(method);
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
+const char* class_name_of(Il2CppClass* klass) {
+    if (klass == nullptr || p_class_get_name == nullptr) return "?";
+    const char* name = p_class_get_name(klass);
+    return name != nullptr ? name : "?";
+}
+
 struct BlockSpec {
     const char* klass;
     const char* method;
@@ -299,7 +347,6 @@ struct BlockSpec {
 
 const BlockSpec kBlockSpecs[] = {
     {"FirebaseScript", "Initialize", reinterpret_cast<void*>(block_firebase_initialize)},
-    {"FirebaseScript", "Initialise", reinterpret_cast<void*>(block_firebase_initialize)},
     {"FirebaseScript", "SetupAppCheckProvider", reinterpret_cast<void*>(block_setup_appcheck)},
     {"FirebaseScript", "get_AppCheckTokenError", reinterpret_cast<void*>(block_get_appcheck_error)},
     {"FirebaseScript", "set_AppCheckTokenError", reinterpret_cast<void*>(block_set_appcheck_error)},
@@ -315,19 +362,23 @@ const BlockSpec kBlockSpecs[] = {
     {"AdManager", "SetFriendCode", reinterpret_cast<void*>(block_repro_friend_code)},
     {"AdManager", "TrackEvent", reinterpret_cast<void*>(block_repro_track)},
     {"AdManager", "SendPushRegistrationId", reinterpret_cast<void*>(block_repro_push)},
-    {"AdManager", "SetPushRegistrationId", reinterpret_cast<void*>(block_repro_push)},
 };
 
 void install_telemetry(Il2CppDomain domain) {
     for (const BlockSpec& spec : kBlockSpecs) {
         Il2CppClass* klass = find_class(domain, "", spec.klass);
-        if (klass == nullptr) {
-            LOGE("failed to resolve %s", spec.klass);
-            continue;
-        }
         MethodInfo* method = nullptr;
-        for (int argc = 0; argc <= 6 && method == nullptr; ++argc) {
-            method = p_class_get_method_from_name(klass, spec.method, argc);
+        if (klass != nullptr) {
+            for (int argc = 0; argc <= 6 && method == nullptr; ++argc) {
+                method = p_class_get_method_from_name(klass, spec.method, argc);
+            }
+        }
+        if (method == nullptr) {
+            Il2CppClass* owner = nullptr;
+            method = find_method_anywhere(domain, spec.method, &owner);
+            if (method != nullptr) {
+                LOGI("resolved %s::%s via metadata scan", class_name_of(owner), spec.method);
+            }
         }
         if (method == nullptr) {
             LOGE("failed to resolve %s::%s", spec.klass, spec.method);
@@ -561,6 +612,16 @@ void* init_thread(void*) {
     p_string_new = reinterpret_cast<fn_string_new_t>(dlsym(lib, "il2cpp_string_new"));
     p_string_chars = reinterpret_cast<fn_string_chars_t>(dlsym(lib, "il2cpp_string_chars"));
     p_string_length = reinterpret_cast<fn_string_length_t>(dlsym(lib, "il2cpp_string_length"));
+    p_image_get_class_count = reinterpret_cast<fn_image_get_class_count_t>(
+        dlsym(lib, "il2cpp_image_get_class_count"));
+    p_image_get_class = reinterpret_cast<fn_image_get_class_t>(
+        dlsym(lib, "il2cpp_image_get_class"));
+    p_class_get_methods = reinterpret_cast<fn_class_get_methods_t>(
+        dlsym(lib, "il2cpp_class_get_methods"));
+    p_method_get_name = reinterpret_cast<fn_method_get_name_t>(
+        dlsym(lib, "il2cpp_method_get_name"));
+    p_class_get_name = reinterpret_cast<fn_class_get_name_t>(
+        dlsym(lib, "il2cpp_class_get_name"));
 
     if (p_domain_get == nullptr || p_domain_get_assemblies == nullptr ||
         p_assembly_get_image == nullptr || p_class_from_name == nullptr ||
