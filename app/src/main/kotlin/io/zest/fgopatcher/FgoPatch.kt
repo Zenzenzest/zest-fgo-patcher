@@ -48,7 +48,7 @@ object FgoPatch {
      * installs alongside the real io.zest.betterfgo.* app instead of replacing
      * it. Flip to false for release builds.
      */
-    const val TEST_BUILD = true
+    const val TEST_BUILD = false
     private val testInfix = if (TEST_BUILD) "test." else ""
     private val testLabel = if (TEST_BUILD) " (test)" else ""
 
