@@ -136,6 +136,41 @@ int hook_get_touch_count(void* method) {
     return count;
 }
 
+// --- UnityEngine.Application.set_targetFrameRate (static) -------------------
+typedef void (*SetTargetFrameRate_t)(int fps, void* method);
+SetTargetFrameRate_t orig_set_target_frame_rate = nullptr;
+
+void hook_set_target_frame_rate(int fps, void* method) {
+    (void)fps;
+    static bool logged = false;
+    if (!logged) {
+        LOGI("Setting framerate to 60fps.");
+        logged = true;
+    }
+    if (orig_set_target_frame_rate != nullptr) {
+        orig_set_target_frame_rate(60, method);
+    }
+}
+
+// --- UnityEngine.Time.set_timeScale / get_timeScale (static) ----------------
+typedef void (*SetTimeScale_t)(float value, void* method);
+SetTimeScale_t orig_set_time_scale = nullptr;
+
+void hook_set_time_scale(float value, void* method) {
+    (void)orig_set_time_scale;
+    (void)method;
+    // Matches the donor: keep the game at normal speed even when a scene tries
+    // to slow it down (NP animations, cutscenes).
+    LOGI("Blocked timescale change to %.2f", value);
+}
+
+typedef float (*GetTimeScale_t)(void* method);
+GetTimeScale_t orig_get_time_scale = nullptr;
+
+float hook_get_time_scale(void* method) {
+    return orig_get_time_scale != nullptr ? orig_get_time_scale(method) : 1.0f;
+}
+
 Il2CppClass* find_class(Il2CppDomain domain, const char* name_space, const char* name) {
     size_t count = 0;
     const Il2CppAssembly** assemblies = p_domain_get_assemblies(domain, &count);
@@ -181,6 +216,9 @@ void resolve_and_hook() {
         return;
     }
 
+    Il2CppClass* application = find_class(domain, "UnityEngine", "Application");
+    Il2CppClass* time = find_class(domain, "UnityEngine", "Time");
+
     MethodInfo* set_limit_up =
         p_class_get_method_from_name(combine, "SetLimitUpCombineInfo", 10);
     MethodInfo* click_next = p_class_get_method_from_name(combine, "clickNext", 0);
@@ -188,6 +226,15 @@ void resolve_and_hook() {
     MethodInfo* stop_voice = p_class_get_method_from_name(combine, "stopVoice", 0);
     MethodInfo* on_finish_voice = p_class_get_method_from_name(combine, "OnFinishVoice", 1);
     MethodInfo* touch_count = p_class_get_method_from_name(input, "get_touchCount", 0);
+    MethodInfo* set_target_frame_rate = application != nullptr
+        ? p_class_get_method_from_name(application, "set_targetFrameRate", 1)
+        : nullptr;
+    MethodInfo* set_time_scale = time != nullptr
+        ? p_class_get_method_from_name(time, "set_timeScale", 1)
+        : nullptr;
+    MethodInfo* get_time_scale = time != nullptr
+        ? p_class_get_method_from_name(time, "get_timeScale", 0)
+        : nullptr;
 
     void* set_limit_up_ptr = method_ptr(set_limit_up);
     void* click_next_ptr = method_ptr(click_next);
@@ -195,10 +242,15 @@ void resolve_and_hook() {
     void* stop_voice_ptr = method_ptr(stop_voice);
     void* on_finish_voice_ptr = method_ptr(on_finish_voice);
     void* touch_count_ptr = method_ptr(touch_count);
+    void* set_target_frame_rate_ptr = method_ptr(set_target_frame_rate);
+    void* set_time_scale_ptr = method_ptr(set_time_scale);
+    void* get_time_scale_ptr = method_ptr(get_time_scale);
 
     LOGI("resolved: setLimitUp=%p clickNext=%p close=%p stopVoice=%p finishVoice=%p touchCount=%p",
          set_limit_up_ptr, click_next_ptr, close_ptr, stop_voice_ptr, on_finish_voice_ptr,
          touch_count_ptr);
+    LOGI("resolved: framerate=%p timeScale=%p getTimeScale=%p",
+         set_target_frame_rate_ptr, set_time_scale_ptr, get_time_scale_ptr);
 
     if (set_limit_up_ptr != nullptr) {
         if (DobbyHook(set_limit_up_ptr, reinterpret_cast<void*>(hook_set_limit_up),
@@ -223,6 +275,37 @@ void resolve_and_hook() {
         } else {
             LOGE("failed to hook get_touchCount");
         }
+    }
+    if (set_target_frame_rate_ptr != nullptr) {
+        if (DobbyHook(set_target_frame_rate_ptr,
+                      reinterpret_cast<void*>(hook_set_target_frame_rate),
+                      reinterpret_cast<void**>(&orig_set_target_frame_rate)) == 0) {
+            LOGI("hooked Application::set_targetFrameRate");
+        } else {
+            LOGE("failed to hook Application::set_targetFrameRate");
+        }
+    } else {
+        LOGE("failed to resolve Application::set_targetFrameRate");
+    }
+    if (set_time_scale_ptr != nullptr) {
+        if (DobbyHook(set_time_scale_ptr, reinterpret_cast<void*>(hook_set_time_scale),
+                      reinterpret_cast<void**>(&orig_set_time_scale)) == 0) {
+            LOGI("hooked Time::set_timeScale");
+        } else {
+            LOGE("failed to hook Time::set_timeScale");
+        }
+    } else {
+        LOGE("failed to resolve Time::set_timeScale");
+    }
+    if (get_time_scale_ptr != nullptr) {
+        if (DobbyHook(get_time_scale_ptr, reinterpret_cast<void*>(hook_get_time_scale),
+                      reinterpret_cast<void**>(&orig_get_time_scale)) == 0) {
+            LOGI("hooked Time::get_timeScale");
+        } else {
+            LOGE("failed to hook Time::get_timeScale");
+        }
+    } else {
+        LOGE("failed to resolve Time::get_timeScale");
     }
 
     g_click_next = click_next;
