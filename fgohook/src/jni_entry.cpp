@@ -24,6 +24,7 @@ typedef void* Il2CppAssembly;
 typedef void* Il2CppImage;
 typedef void* Il2CppClass;
 typedef void* MethodInfo;
+typedef void Il2CppType;
 
 typedef Il2CppDomain (*fn_domain_get_t)();
 typedef const Il2CppAssembly** (*fn_domain_get_assemblies_t)(Il2CppDomain, size_t*);
@@ -39,6 +40,10 @@ typedef Il2CppClass* (*fn_image_get_class_t)(const Il2CppImage*, size_t);
 typedef void* (*fn_class_get_methods_t)(Il2CppClass*, void**);
 typedef const char* (*fn_method_get_name_t)(void*);
 typedef const char* (*fn_class_get_name_t)(Il2CppClass*);
+typedef uint32_t (*fn_method_get_param_count_t)(const MethodInfo*);
+typedef const Il2CppType* (*fn_method_get_param_t)(const MethodInfo*, uint32_t);
+typedef const Il2CppType* (*fn_method_get_return_type_t)(const MethodInfo*);
+typedef char* (*fn_type_get_name_t)(const Il2CppType*);
 typedef void* (*fn_init_t)(const char* domain_name);
 
 fn_domain_get_t p_domain_get = nullptr;
@@ -55,6 +60,10 @@ fn_image_get_class_t p_image_get_class = nullptr;
 fn_class_get_methods_t p_class_get_methods = nullptr;
 fn_method_get_name_t p_method_get_name = nullptr;
 fn_class_get_name_t p_class_get_name = nullptr;
+fn_method_get_param_count_t p_method_get_param_count = nullptr;
+fn_method_get_param_t p_method_get_param = nullptr;
+fn_method_get_return_type_t p_method_get_return_type = nullptr;
+fn_type_get_name_t p_type_get_name = nullptr;
 
 fn_init_t orig_il2cpp_init = nullptr;
 volatile int g_resolved = 0;
@@ -71,6 +80,12 @@ void* g_on_finish_voice_fn = nullptr;
 volatile int g_active = 0;
 volatile int g_touch_down = 0;
 uint64_t g_last_click_ms = 0;
+
+// NP skip: the donor holds Time.timeScale at 8.0 until the NP ends.
+volatile int g_np_skip_active = 0;
+float g_saved_time_scale = 1.0f;
+MethodInfo* g_set_time_scale_method = nullptr;
+MethodInfo* g_get_time_scale_method = nullptr;
 
 uint64_t now_ms() {
     timespec ts{};
@@ -176,11 +191,16 @@ typedef void (*SetTimeScale_t)(float value, void* method);
 SetTimeScale_t orig_set_time_scale = nullptr;
 
 void hook_set_time_scale(float value, void* method) {
-    (void)orig_set_time_scale;
-    (void)method;
-    // Matches the donor: keep the game at normal speed even when a scene tries
-    // to slow it down (NP animations, cutscenes).
-    LOGI("Blocked timescale change to %.2f", value);
+    // While an NP skip is active, hold the 8x fast-forward: ignore every
+    // timescale change the game tries to make. Outside a skip, forward
+    // everything (slow-mo, normal speed, fast-forward).
+    if (g_np_skip_active) {
+        LOGI("Blocked timescale change to %.2f", value);
+        return;
+    }
+    if (orig_set_time_scale != nullptr) {
+        orig_set_time_scale(value, method);
+    }
 }
 
 typedef float (*GetTimeScale_t)(void* method);
@@ -220,6 +240,16 @@ std::string utf16_to_utf8(const uint16_t* chars, int32_t length) {
         }
     }
     return out;
+}
+
+std::string il2cpp_string_to_utf8(void* value) {
+    if (value == nullptr || p_string_length == nullptr || p_string_chars == nullptr) {
+        return {};
+    }
+    const int32_t length = p_string_length(value);
+    const uint16_t* chars = p_string_chars(value);
+    if (chars == nullptr || length <= 0) return {};
+    return utf16_to_utf8(chars, length);
 }
 
 void* replace_il2cpp_string(void* value) {
@@ -339,6 +369,190 @@ const char* class_name_of(Il2CppClass* klass) {
     return name != nullptr ? name : "?";
 }
 
+Il2CppClass* find_class_anywhere(Il2CppDomain domain, const char* class_name) {
+    if (p_image_get_class_count == nullptr || p_image_get_class == nullptr ||
+        p_class_get_name == nullptr) {
+        return nullptr;
+    }
+    size_t assembly_count = 0;
+    const Il2CppAssembly** assemblies = p_domain_get_assemblies(domain, &assembly_count);
+    if (assemblies == nullptr) return nullptr;
+    for (size_t a = 0; a < assembly_count; ++a) {
+        Il2CppImage* image = p_assembly_get_image(assemblies[a]);
+        if (image == nullptr) continue;
+        const size_t class_count = p_image_get_class_count(image);
+        for (size_t i = 0; i < class_count; ++i) {
+            Il2CppClass* klass = p_image_get_class(image, i);
+            if (klass == nullptr) continue;
+            const char* name = p_class_get_name(klass);
+            if (name != nullptr && strcmp(name, class_name) == 0) return klass;
+        }
+    }
+    return nullptr;
+}
+
+void log_method_signature(const char* label, void* method) {
+    if (method == nullptr) {
+        LOGE("%s: not found", label);
+        return;
+    }
+    uint32_t iflags = 0;
+    const uint32_t flags = p_method_get_flags != nullptr
+        ? p_method_get_flags(reinterpret_cast<MethodInfo*>(method), &iflags)
+        : 0;
+    const uint32_t argc = p_method_get_param_count != nullptr
+        ? p_method_get_param_count(reinterpret_cast<MethodInfo*>(method))
+        : 0;
+    const Il2CppType* ret = p_method_get_return_type != nullptr
+        ? p_method_get_return_type(reinterpret_cast<MethodInfo*>(method))
+        : nullptr;
+    const char* ret_name = (ret != nullptr && p_type_get_name != nullptr)
+        ? p_type_get_name(ret)
+        : "?";
+    LOGI("%s: static=%d argc=%u ret=%s", label, (flags & 0x0010u) != 0, argc,
+         ret_name != nullptr ? ret_name : "?");
+    for (uint32_t i = 0; i < argc; ++i) {
+        const Il2CppType* param = p_method_get_param != nullptr
+            ? p_method_get_param(reinterpret_cast<MethodInfo*>(method), i)
+            : nullptr;
+        const char* param_name = (param != nullptr && p_type_get_name != nullptr)
+            ? p_type_get_name(param)
+            : "?";
+        LOGI("%s param %u: %s", label, i, param_name != nullptr ? param_name : "?");
+    }
+}
+
+void log_methods_named(Il2CppClass* klass, const char* method_name) {
+    if (klass == nullptr || p_class_get_methods == nullptr || p_method_get_name == nullptr) {
+        return;
+    }
+    void* iter = nullptr;
+    void* method = nullptr;
+    while ((method = p_class_get_methods(klass, &iter)) != nullptr) {
+        const char* name = p_method_get_name(method);
+        if (name != nullptr && strcmp(name, method_name) == 0) {
+            log_method_signature(method_name, method);
+        }
+    }
+}
+
+void log_np_signatures(Il2CppDomain domain) {
+    Il2CppClass* battle = find_class_anywhere(domain, "BattlePerformance");
+    Il2CppClass* camera = find_class_anywhere(domain, "UICamera");
+    LOGI("np signatures: BattlePerformance=%p UICamera=%p", battle, camera);
+    if (battle != nullptr) {
+        log_methods_named(battle, "startNoblePhantasm");
+        log_methods_named(battle, "endNoblePhantasm");
+    }
+    if (camera != nullptr) {
+        log_methods_named(camera, "Notify");
+    }
+}
+
+// --- NP skip ---------------------------------------------------------------
+volatile int g_np_active = 0;
+void* g_np_self = nullptr;
+
+typedef void (*StartNoble_t)(void* self, void* method);
+StartNoble_t orig_start_noble = nullptr;
+
+void hook_start_noble(void* self, void* method) {
+    g_np_self = self;
+    g_np_active = 1;
+    g_np_skip_active = 0;
+    LOGI("NP started");
+    if (orig_start_noble != nullptr) orig_start_noble(self, method);
+}
+
+typedef void (*EndNoble_t)(void* self, int reason, void* method);
+EndNoble_t orig_end_noble = nullptr;
+
+void hook_end_noble(void* self, int reason, void* method) {
+    if (g_np_skip_active) {
+        if (orig_set_time_scale != nullptr && g_set_time_scale_method != nullptr) {
+            orig_set_time_scale(g_saved_time_scale, g_set_time_scale_method);
+        }
+        g_np_skip_active = 0;
+    }
+    g_np_active = 0;
+    g_np_self = nullptr;
+    LOGI("NP ended (reason=%d)", reason);
+    if (orig_end_noble != nullptr) orig_end_noble(self, reason, method);
+}
+
+typedef void (*Notify_t)(void* go, void* message, void* arg, void* method);
+Notify_t orig_notify = nullptr;
+
+void hook_notify(void* go, void* message, void* arg, void* method) {
+    bool double_click = false;
+    if (g_np_active && !g_np_skip_active) {
+        const std::string text = il2cpp_string_to_utf8(message);
+        if (!text.empty()) {
+            static int logged = 0;
+            if (logged < 40) {
+                LOGI("np notify: %s", text.c_str());
+                ++logged;
+            }
+        }
+        double_click = (text == "OnDoubleClick");
+    }
+
+    if (double_click) {
+        LOGI("NP skip: 8x fast-forward");
+        g_saved_time_scale = orig_get_time_scale != nullptr
+            ? orig_get_time_scale(g_get_time_scale_method)
+            : 1.0f;
+        g_np_skip_active = 1;
+        if (orig_set_time_scale != nullptr && g_set_time_scale_method != nullptr) {
+            orig_set_time_scale(8.0f, g_set_time_scale_method);
+        }
+    }
+
+    if (orig_notify != nullptr) orig_notify(go, message, arg, method);
+}
+
+void install_np_skip(Il2CppDomain domain) {
+    Il2CppClass* battle = find_class_anywhere(domain, "BattlePerformance");
+    Il2CppClass* camera = find_class_anywhere(domain, "UICamera");
+
+    if (battle != nullptr) {
+        MethodInfo* start = p_class_get_method_from_name(battle, "startNoblePhantasm", 0);
+        MethodInfo* end = p_class_get_method_from_name(battle, "endNoblePhantasm", 1);
+        void* start_fn = method_ptr(start);
+        void* end_fn = method_ptr(end);
+        if (start_fn != nullptr &&
+            DobbyHook(start_fn, reinterpret_cast<void*>(hook_start_noble),
+                      reinterpret_cast<void**>(&orig_start_noble)) == 0) {
+            LOGI("hooked startNoblePhantasm");
+        } else {
+            LOGE("failed to hook startNoblePhantasm");
+        }
+        if (end_fn != nullptr &&
+            DobbyHook(end_fn, reinterpret_cast<void*>(hook_end_noble),
+                      reinterpret_cast<void**>(&orig_end_noble)) == 0) {
+            LOGI("hooked endNoblePhantasm");
+        } else {
+            LOGE("failed to hook endNoblePhantasm");
+        }
+    } else {
+        LOGE("failed to resolve BattlePerformance");
+    }
+
+    if (camera != nullptr) {
+        MethodInfo* notify = p_class_get_method_from_name(camera, "Notify", 3);
+        void* notify_fn = method_ptr(notify);
+        if (notify_fn != nullptr &&
+            DobbyHook(notify_fn, reinterpret_cast<void*>(hook_notify),
+                      reinterpret_cast<void**>(&orig_notify)) == 0) {
+            LOGI("hooked UICamera::Notify");
+        } else {
+            LOGE("failed to hook UICamera::Notify");
+        }
+    } else {
+        LOGE("failed to resolve UICamera");
+    }
+}
+
 struct BlockSpec {
     const char* klass;
     const char* method;
@@ -439,6 +653,9 @@ void resolve_and_hook() {
     void* set_target_frame_rate_ptr = method_ptr(set_target_frame_rate);
     void* set_time_scale_ptr = method_ptr(set_time_scale);
     void* get_time_scale_ptr = method_ptr(get_time_scale);
+
+    g_set_time_scale_method = set_time_scale;
+    g_get_time_scale_method = get_time_scale;
 
     LOGI("resolved: framerate=%p timeScale=%p getTimeScale=%p",
          set_target_frame_rate_ptr, set_time_scale_ptr, get_time_scale_ptr);
@@ -577,6 +794,8 @@ void resolve_and_hook() {
     g_on_finish_voice = on_finish_voice;
     g_on_finish_voice_fn = on_finish_voice_ptr;
 
+    log_np_signatures(domain);
+    install_np_skip(domain);
     install_telemetry(domain);
 
     LOGI("hooks installed");
@@ -622,6 +841,14 @@ void* init_thread(void*) {
         dlsym(lib, "il2cpp_method_get_name"));
     p_class_get_name = reinterpret_cast<fn_class_get_name_t>(
         dlsym(lib, "il2cpp_class_get_name"));
+    p_method_get_param_count = reinterpret_cast<fn_method_get_param_count_t>(
+        dlsym(lib, "il2cpp_method_get_param_count"));
+    p_method_get_param = reinterpret_cast<fn_method_get_param_t>(
+        dlsym(lib, "il2cpp_method_get_param"));
+    p_method_get_return_type = reinterpret_cast<fn_method_get_return_type_t>(
+        dlsym(lib, "il2cpp_method_get_return_type"));
+    p_type_get_name = reinterpret_cast<fn_type_get_name_t>(
+        dlsym(lib, "il2cpp_type_get_name"));
 
     if (p_domain_get == nullptr || p_domain_get_assemblies == nullptr ||
         p_assembly_get_image == nullptr || p_class_from_name == nullptr ||
