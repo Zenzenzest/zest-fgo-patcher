@@ -15,6 +15,7 @@
 #include <dobby.h>
 
 #include "log.h"
+#include "localization.h"
 
 namespace {
 
@@ -29,6 +30,10 @@ typedef const Il2CppAssembly** (*fn_domain_get_assemblies_t)(Il2CppDomain, size_
 typedef Il2CppImage* (*fn_assembly_get_image_t)(const Il2CppAssembly*);
 typedef Il2CppClass* (*fn_class_from_name_t)(const Il2CppImage*, const char*, const char*);
 typedef MethodInfo* (*fn_class_get_method_from_name_t)(Il2CppClass*, const char*, int);
+typedef uint32_t (*fn_method_get_flags_t)(const MethodInfo*, uint32_t*);
+typedef void* (*fn_string_new_t)(const char*);
+typedef uint16_t* (*fn_string_chars_t)(void*);
+typedef int32_t (*fn_string_length_t)(void*);
 typedef void* (*fn_init_t)(const char* domain_name);
 
 fn_domain_get_t p_domain_get = nullptr;
@@ -36,6 +41,10 @@ fn_domain_get_assemblies_t p_domain_get_assemblies = nullptr;
 fn_assembly_get_image_t p_assembly_get_image = nullptr;
 fn_class_from_name_t p_class_from_name = nullptr;
 fn_class_get_method_from_name_t p_class_get_method_from_name = nullptr;
+fn_method_get_flags_t p_method_get_flags = nullptr;
+fn_string_new_t p_string_new = nullptr;
+fn_string_chars_t p_string_chars = nullptr;
+fn_string_length_t p_string_length = nullptr;
 
 fn_init_t orig_il2cpp_init = nullptr;
 volatile int g_resolved = 0;
@@ -169,6 +178,74 @@ GetTimeScale_t orig_get_time_scale = nullptr;
 
 float hook_get_time_scale(void* method) {
     return orig_get_time_scale != nullptr ? orig_get_time_scale(method) : 1.0f;
+}
+
+// --- EntityScriptUtil.GetStringValue (static or instance) -------------------
+std::string utf16_to_utf8(const uint16_t* chars, int32_t length) {
+    std::string out;
+    out.reserve(static_cast<size_t>(length));
+    for (int32_t i = 0; i < length; ++i) {
+        uint32_t code = chars[i];
+        if (code >= 0xD800 && code <= 0xDBFF && i + 1 < length) {
+            const uint32_t low = chars[i + 1];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                ++i;
+            }
+        }
+        if (code <= 0x7F) {
+            out.push_back(static_cast<char>(code));
+        } else if (code <= 0x7FF) {
+            out.push_back(static_cast<char>(0xC0 | (code >> 6)));
+            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+        } else if (code <= 0xFFFF) {
+            out.push_back(static_cast<char>(0xE0 | (code >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+        } else {
+            out.push_back(static_cast<char>(0xF0 | (code >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((code >> 12) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+        }
+    }
+    return out;
+}
+
+void* replace_il2cpp_string(void* value) {
+    if (value == nullptr) return nullptr;
+    if (p_string_chars == nullptr || p_string_length == nullptr || p_string_new == nullptr) {
+        return value;
+    }
+    const int32_t length = p_string_length(value);
+    const uint16_t* chars = p_string_chars(value);
+    if (chars == nullptr || length <= 0) return value;
+
+    const std::string original = utf16_to_utf8(chars, length);
+    const std::string fixed = zest::replace_name(original);
+    if (fixed == original) return value;
+
+    LOGI("name fix: %s -> %s", original.c_str(), fixed.c_str());
+    return p_string_new(fixed.c_str());
+}
+
+typedef void* (*GetStringValueStatic_t)(void*, void*, void*, void*);
+typedef void* (*GetStringValueInstance_t)(void*, void*, void*, void*, void*);
+GetStringValueStatic_t orig_get_string_value_static = nullptr;
+GetStringValueInstance_t orig_get_string_value_instance = nullptr;
+
+void* hook_get_string_value_static(void* a1, void* a2, void* a3, void* method) {
+    void* result = orig_get_string_value_static != nullptr
+        ? orig_get_string_value_static(a1, a2, a3, method)
+        : nullptr;
+    return replace_il2cpp_string(result);
+}
+
+void* hook_get_string_value_instance(void* self, void* a1, void* a2, void* a3, void* method) {
+    void* result = orig_get_string_value_instance != nullptr
+        ? orig_get_string_value_instance(self, a1, a2, a3, method)
+        : nullptr;
+    return replace_il2cpp_string(result);
 }
 
 Il2CppClass* find_class(Il2CppDomain domain, const char* name_space, const char* name) {
@@ -320,6 +397,42 @@ void resolve_and_hook() {
         }
     }
 
+    Il2CppClass* entity_util = find_class(domain, "", "EntityScriptUtil");
+    MethodInfo* get_string_value = entity_util != nullptr
+        ? p_class_get_method_from_name(entity_util, "GetStringValue", 3)
+        : nullptr;
+    void* get_string_value_ptr = method_ptr(get_string_value);
+    LOGI("resolved: getStringValue=%p", get_string_value_ptr);
+
+    if (get_string_value_ptr != nullptr) {
+        if (p_method_get_flags == nullptr || p_string_new == nullptr ||
+            p_string_chars == nullptr || p_string_length == nullptr) {
+            LOGE("failed to resolve IL2CPP string API for EntityScriptUtil::GetStringValue");
+        } else {
+            uint32_t iflags = 0;
+            const uint32_t flags = p_method_get_flags(get_string_value, &iflags);
+            if ((flags & 0x0010u) != 0) {  // MethodAttributes.Static
+                if (DobbyHook(get_string_value_ptr,
+                              reinterpret_cast<void*>(hook_get_string_value_static),
+                              reinterpret_cast<void**>(&orig_get_string_value_static)) == 0) {
+                    LOGI("hooked EntityScriptUtil::GetStringValue (static)");
+                } else {
+                    LOGE("failed to hook EntityScriptUtil::GetStringValue");
+                }
+            } else {
+                if (DobbyHook(get_string_value_ptr,
+                              reinterpret_cast<void*>(hook_get_string_value_instance),
+                              reinterpret_cast<void**>(&orig_get_string_value_instance)) == 0) {
+                    LOGI("hooked EntityScriptUtil::GetStringValue (instance)");
+                } else {
+                    LOGE("failed to hook EntityScriptUtil::GetStringValue");
+                }
+            }
+        }
+    } else {
+        LOGE("failed to resolve EntityScriptUtil::GetStringValue");
+    }
+
     g_click_next = click_next;
     g_click_next_fn = click_next_ptr;
     g_stop_voice = stop_voice;
@@ -355,6 +468,11 @@ void* init_thread(void*) {
         dlsym(lib, "il2cpp_class_from_name"));
     p_class_get_method_from_name = reinterpret_cast<fn_class_get_method_from_name_t>(
         dlsym(lib, "il2cpp_class_get_method_from_name"));
+    p_method_get_flags = reinterpret_cast<fn_method_get_flags_t>(
+        dlsym(lib, "il2cpp_method_get_flags"));
+    p_string_new = reinterpret_cast<fn_string_new_t>(dlsym(lib, "il2cpp_string_new"));
+    p_string_chars = reinterpret_cast<fn_string_chars_t>(dlsym(lib, "il2cpp_string_chars"));
+    p_string_length = reinterpret_cast<fn_string_length_t>(dlsym(lib, "il2cpp_string_length"));
 
     if (p_domain_get == nullptr || p_domain_get_assemblies == nullptr ||
         p_assembly_get_image == nullptr || p_class_from_name == nullptr ||
