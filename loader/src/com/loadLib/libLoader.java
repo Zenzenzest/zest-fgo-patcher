@@ -5,7 +5,7 @@ import android.os.Handler;
 
 /**
  * Injected into the patched game's UnityPlayerActivity. Loads the in-house
- * native hook; no donor libavalon is used.
+ * native hook.
  */
 public class libLoader extends Activity {
     public static void loadLib() {

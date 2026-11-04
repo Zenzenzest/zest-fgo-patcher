@@ -14,7 +14,7 @@
 
 ### Changed
 
-- **No donor and no `libavalon`.** Production builds use the bundled `libfgohook.so`; the patcher no longer requires or injects a donor library.
+- **No donor library.** Production builds use the bundled `libfgohook.so`; the patcher no longer requires or injects a donor library.
 - Production output uses `io.zest.betterfgo.en` / `io.zest.betterfgo` (no test-only packages).
 - Launcher label is **Zest FGO Patcher**; version bumped to 1.1.
 - The injected loader now loads only `libfgohook`.
@@ -22,7 +22,7 @@
 ### Removed
 
 - Donor import and armv7 merge UI.
-- The `libavalon` dependency and donor cache requirement.
+- The legacy donor-library dependency and donor cache requirement.
 - The NP subtitle suppression experiment (not shipped).
 
 ### Fixed

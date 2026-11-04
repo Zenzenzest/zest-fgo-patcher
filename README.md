@@ -1,6 +1,6 @@
 # Zest FGO Patcher
 
-An on-device patcher for **Fate/Grand Order (EN/NA and JP)**. No PC, no donor APK, and no `libavalon` — the patcher injects Zest's own native hook.
+An on-device patcher for **Fate/Grand Order (EN/NA and JP)**. No PC and no donor APK — the patcher injects Zest's own native hook.
 
 ## Features
 
@@ -17,7 +17,7 @@ An on-device patcher for **Fate/Grand Order (EN/NA and JP)**. No PC, no donor AP
 - Fate/Grand Order EN or JP installed, or a vanilla `.xapk`
 - No donor app required
 
-This project does **not** ship game files, `libavalon.so`, or signing keys.
+This project does **not** ship game files or signing keys.
 
 ## Usage
 
@@ -60,7 +60,7 @@ Requirements: JDK 17, Android SDK 36, Android NDK r27c at `$HOME/ndk/android-ndk
 
 - [Morphe Patcher](https://github.com/MorpheApp/morphe-patcher) — on-device patching engine (GPLv3)
 - [Dobby](https://github.com/jmpews/Dobby) — inline hooking (Apache-2.0)
-- BetterFGO / Rayshift — inspired the feature set; no `libavalon.so` is shipped or required
+- BetterFGO / Rayshift — inspired the feature set
 
 Not affiliated with Aniplex, Lasengle, Type-Moon, or Rayshift.
 

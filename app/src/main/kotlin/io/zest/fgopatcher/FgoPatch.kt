@@ -22,7 +22,7 @@ data class FgoVariant(
 /**
  * Zest's in-house patch.
  *
- * No donor APK and no libavalon: the bundled libfgohook.so provides 60 FPS,
+ * No donor APK: the bundled libfgohook.so provides 60 FPS,
  * NP skip, ascension dialogue skip and name fixes. `loader.mpe` is our own code.
  */
 object FgoPatch {
@@ -75,8 +75,7 @@ object FgoPatch {
                 .map { it.removePrefix("lib/").substringBefore('/') }
                 .toSortedSet()
 
-            // No libavalon in production builds. Remove a stale copy when
-            // re-patching an older patched APK.
+            // Remove any legacy donor library when re-patching an older APK.
             entries.filter { it.endsWith("/libavalon.so") }.forEach { delete(it) }
 
             // Inject the in-house hook for every ABI the target ships.
