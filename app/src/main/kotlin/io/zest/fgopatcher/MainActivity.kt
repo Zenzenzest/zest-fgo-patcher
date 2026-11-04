@@ -528,13 +528,19 @@ private fun refreshDonors(ctx: Context, merge: Boolean, log: (String) -> Unit): 
 
         val installed = DONOR_APPS
             .filter { it.variantKey == variant.key }
-            .firstNotNullOfOrNull { app ->
+            .mapNotNull { app ->
                 val info = try {
                     ctx.packageManager.getPackageInfo(app.pkg, 0)
                 } catch (t: Throwable) {
                     null
                 }
                 if (info != null) app to info else null
+            }
+            .maxByOrNull { (app, info) ->
+                val code = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode
+                           else info.versionCode.toLong()
+                // Newest donor wins; on a tie prefer our own updated app.
+                code * 2 + if (app.pkg.startsWith("io.zest.")) 1 else 0
             }
 
         if (installed == null) {
