@@ -580,19 +580,11 @@ private fun ZestHeader(
 
 @Composable
 private fun BrandMark(size: Int = 42) {
-    Box(
-        modifier = Modifier
-            .size(size.dp)
-            .clip(RoundedCornerShape((size * 0.3f).dp))
-            .background(Color(0xFFC1A38E)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Image(
-            painter = painterResource(R.mipmap.ic_launcher_foreground),
-            contentDescription = "Zest FGO Patcher icon",
-            modifier = Modifier.fillMaxSize(),
-        )
-    }
+    Image(
+        painter = painterResource(R.drawable.brand_icon),
+        contentDescription = "Zest FGO Patcher icon",
+        modifier = Modifier.size(size.dp),
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
