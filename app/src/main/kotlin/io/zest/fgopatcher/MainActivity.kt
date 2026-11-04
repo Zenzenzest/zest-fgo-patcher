@@ -517,6 +517,15 @@ private fun donorStatusText(ctx: Context): String {
  */
 private fun refreshDonors(ctx: Context, merge: Boolean, log: (String) -> Unit): String {
     for (variant in FgoPatch.VARIANTS) {
+        // A manual import is an explicit choice; never overwrite it with a
+        // different donor that happens to be installed.
+        val cached = readMeta(ctx, variant)
+        if (cached?.manual == true && variantReady(ctx, variant)) {
+            val version = cached.nativeVersionName.ifBlank { cached.donorVersionName }
+            log("${cached.source.ifEmpty { variant.label }} — using imported donor (v$version)")
+            continue
+        }
+
         val installed = DONOR_APPS
             .filter { it.variantKey == variant.key }
             .firstNotNullOfOrNull { app ->
@@ -579,16 +588,19 @@ private fun prepareFromFile(
                 extracted++
             }
             if (extracted == 0) return
-            meta.donorPkg = app.pkg
-            meta.donorVersionCode = versionCode
-            meta.donorVersionName = versionName
-            meta.manual = false
             meta.avalonSha256 = hash
-            meta.source = app.label
             log("${app.label} — extracted libavalon (v$versionName)")
         } else {
             log("${app.label} — cache up to date (v$versionName)")
         }
+
+        // Keep the metadata in sync even when the libavalon cache was reused;
+        // otherwise a version bump leaves the old donor version recorded.
+        meta.donorPkg = app.pkg
+        meta.donorVersionCode = versionCode
+        meta.donorVersionName = versionName
+        meta.manual = false
+        meta.source = app.label
 
         if (merge) {
             val nativeUpToDate = meta.nativePresent &&
@@ -630,72 +642,94 @@ private fun extractNative(zip: ZipFile, ctx: Context, variant: FgoVariant) {
 
 private fun importDonor(ctx: Context, uri: Uri, merge: Boolean, log: (String) -> Unit): String {
     log("importing donor BetterFGO APK…")
-    val files = LinkedHashMap<String, ByteArray>()
-    var manifest: ByteArray? = null
-    ctx.contentResolver.openInputStream(uri)!!.use { input ->
-        ZipInputStream(input).use { zip ->
-            var entry = zip.nextEntry
-            while (entry != null) {
+    val temp = File(ctx.cacheDir, "donor-import.apk")
+    try {
+        // Materialize the APK so PackageManager can read the real versionName.
+        // The binary manifest's string pool is UTF-16, so the old regex found
+        // nothing and every manual import was recorded as "unknown".
+        ctx.contentResolver.openInputStream(uri)!!.use { input ->
+            temp.outputStream().use { output -> input.copyTo(output) }
+        }
+
+        val archive = ctx.packageManager.getPackageArchiveInfo(temp.path, 0)
+        val pkg = archive?.packageName.orEmpty()
+        val versionName = archive?.versionName.orEmpty()
+        val versionCode = when {
+            archive == null -> 0L
+            Build.VERSION.SDK_INT >= 28 -> archive.longVersionCode
+            else -> archive.versionCode.toLong()
+        }
+
+        val manifest = ZipFile(temp).use { zip ->
+            zip.getEntry("AndroidManifest.xml")?.let { zip.getInputStream(it).readBytes() }
+        }
+        val variant = variantForPackage(pkg) ?: inferVariant(manifest) ?: run {
+            log("could not tell if that APK is EN or JP")
+            return donorStatusText(ctx)
+        }
+
+        // Drop the previous native set so ABIs from the old donor don't linger.
+        File(FgoPatch.donorDir(donorRoot(ctx), variant), "native").deleteRecursively()
+
+        var avalonFound = 0
+        val avalonParts = StringBuilder()
+        ZipFile(temp).use { zip ->
+            val entries = zip.entries()
+            while (entries.hasMoreElements()) {
+                val entry = entries.nextElement()
                 val name = entry.name
-                if (name == "AndroidManifest.xml") {
-                    manifest = zip.readBytes()
-                } else if (name.endsWith("/libavalon.so") && name.startsWith("lib/")) {
-                    files[name] = zip.readBytes()
-                } else if (merge && name.startsWith("lib/") && name.endsWith(".so") &&
-                    !name.endsWith("libFirebaseCppAppCheck.so")
-                ) {
-                    val abi = name.removePrefix("lib/").substringBefore('/')
-                    if (abi != "arm64-v8a") files[name] = zip.readBytes()
+                if (entry.isDirectory || !name.startsWith("lib/") || !name.endsWith(".so")) continue
+                if (name.endsWith("libFirebaseCppAppCheck.so")) continue
+                val abi = name.removePrefix("lib/").substringBefore('/')
+                val fileName = name.substringAfterLast('/')
+                if (fileName != "libavalon.so" && (!merge || abi == "arm64-v8a")) continue
+                val bytes = zip.getInputStream(entry).readBytes()
+                val dest = if (fileName == "libavalon.so") {
+                    FgoPatch.libAvalonFile(donorRoot(ctx), variant, abi)
+                } else {
+                    File(FgoPatch.nativeAbiDir(donorRoot(ctx), variant, abi), fileName)
                 }
-                zip.closeEntry()
-                entry = zip.nextEntry
+                dest.parentFile?.mkdirs()
+                dest.writeBytes(bytes)
+                if (fileName == "libavalon.so") {
+                    avalonFound++
+                    avalonParts.append(abi).append(sha256(bytes))
+                }
             }
         }
-    }
-
-    val variant = inferVariant(manifest) ?: run {
-        log("could not tell if that APK is EN or JP")
-        return donorStatusText(ctx)
-    }
-
-    var avalonFound = 0
-    val avalonParts = StringBuilder()
-    for ((name, bytes) in files) {
-        val abi = name.removePrefix("lib/").substringBefore('/')
-        val fileName = name.substringAfterLast('/')
-        val dest = if (fileName == "libavalon.so") {
-            FgoPatch.libAvalonFile(donorRoot(ctx), variant, abi)
-        } else {
-            File(FgoPatch.nativeAbiDir(donorRoot(ctx), variant, abi), fileName)
+        if (avalonFound == 0) {
+            log("no libavalon.so found — is that an existing BetterFGO APK?")
+            return donorStatusText(ctx)
         }
-        dest.parentFile?.mkdirs()
-        dest.writeBytes(bytes)
-        if (fileName == "libavalon.so") {
-            avalonFound++
-            avalonParts.append(abi).append(sha256(bytes))
-        }
-    }
-    if (avalonFound == 0) {
-        log("no libavalon.so found — is that an existing BetterFGO APK?")
-        return donorStatusText(ctx)
-    }
 
-    val versionName = inferVersionName(manifest)
-    writeMeta(
-        ctx,
-        variant,
-        DonorMeta().apply {
-            donorPkg = "manual"
-            manual = true
-            donorVersionName = versionName ?: "unknown"
-            avalonSha256 = sha256(avalonParts.toString().toByteArray())
-            nativePresent = merge
-            nativeVersionName = versionName ?: "unknown"
-            source = "Donor FGO (${variant.key.uppercase()})"
-        },
-    )
-    log("donor imported for ${variant.label}")
-    return donorStatusText(ctx)
+        val resolvedVersion = versionName.ifBlank { "unknown" }
+        writeMeta(
+            ctx,
+            variant,
+            DonorMeta().apply {
+                donorPkg = pkg.ifBlank { "manual" }
+                donorVersionCode = versionCode
+                donorVersionName = resolvedVersion
+                manual = true
+                avalonSha256 = sha256(avalonParts.toString().toByteArray())
+                nativePresent = merge
+                nativeVersionCode = versionCode
+                nativeVersionName = resolvedVersion
+                source = "Donor FGO (${variant.key.uppercase()})"
+            },
+        )
+        log("donor imported for ${variant.label} (v$resolvedVersion)")
+        return donorStatusText(ctx)
+    } finally {
+        temp.delete()
+    }
+}
+
+private fun variantForPackage(pkg: String): FgoVariant? = when {
+    pkg.endsWith(".en") -> FgoPatch.VARIANTS.firstOrNull { it.key == "en" }
+    pkg.contains("fategrandorder") || pkg.contains("betterfgo") ->
+        FgoPatch.VARIANTS.firstOrNull { it.key == "jp" }
+    else -> null
 }
 
 private fun inferVariant(manifest: ByteArray?): FgoVariant? {
@@ -708,12 +742,6 @@ private fun inferVariant(manifest: ByteArray?): FgoVariant? {
         jp -> FgoPatch.VARIANTS.first { it.key == "jp" }
         else -> null
     }
-}
-
-private fun inferVersionName(manifest: ByteArray?): String? {
-    val bytes = manifest ?: return null
-    val text = String(bytes, Charsets.ISO_8859_1)
-    return Regex("\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b").find(text)?.value
 }
 
 // ---------------------------------------------------------------------------
