@@ -1,7 +1,8 @@
 // FGO native hook library.
 //
-// Loaded by libLoader. Waits for IL2CPP, resolves the game's classes/methods
-// by name, and installs inline hooks with the bundled Dobby.
+// Loaded by libLoader. Hooks IL2CPP's init, resolves the game's classes and
+// methods by name once the runtime is ready, and installs inline hooks with
+// the bundled Dobby.
 
 #include <jni.h>
 #include <dlfcn.h>
@@ -28,12 +29,16 @@ typedef const Il2CppAssembly** (*fn_domain_get_assemblies_t)(Il2CppDomain, size_
 typedef Il2CppImage* (*fn_assembly_get_image_t)(const Il2CppAssembly*);
 typedef Il2CppClass* (*fn_class_from_name_t)(const Il2CppImage*, const char*, const char*);
 typedef MethodInfo* (*fn_class_get_method_from_name_t)(Il2CppClass*, const char*, int);
+typedef void* (*fn_init_t)(const char* domain_name);
 
 fn_domain_get_t p_domain_get = nullptr;
 fn_domain_get_assemblies_t p_domain_get_assemblies = nullptr;
 fn_assembly_get_image_t p_assembly_get_image = nullptr;
 fn_class_from_name_t p_class_from_name = nullptr;
 fn_class_get_method_from_name_t p_class_get_method_from_name = nullptr;
+
+fn_init_t orig_il2cpp_init = nullptr;
+volatile int g_resolved = 0;
 
 // The active ascension result component.
 void* g_instance = nullptr;
@@ -143,50 +148,28 @@ Il2CppClass* find_class(Il2CppDomain domain, const char* name_space, const char*
     return nullptr;
 }
 
-void* init_thread(void*) {
-    void* lib = nullptr;
-    while (lib == nullptr) {
-        lib = dlopen("libil2cpp.so", RTLD_NOLOAD | RTLD_NOW);
-        if (lib == nullptr) usleep(100 * 1000);
+/**
+ * Runs once, after IL2CPP has finished initializing. Safe to call from the
+ * thread that returned from il2cpp_init (it is attached).
+ */
+void resolve_and_hook() {
+    if (g_resolved) return;
+    g_resolved = 1;
+
+    Il2CppDomain domain = p_domain_get();
+    if (domain == nullptr) {
+        LOGE("IL2CPP domain not available");
+        g_resolved = 0;
+        return;
     }
-
-    p_domain_get = reinterpret_cast<fn_domain_get_t>(dlsym(lib, "il2cpp_domain_get"));
-    p_domain_get_assemblies = reinterpret_cast<fn_domain_get_assemblies_t>(
-        dlsym(lib, "il2cpp_domain_get_assemblies"));
-    p_assembly_get_image = reinterpret_cast<fn_assembly_get_image_t>(
-        dlsym(lib, "il2cpp_assembly_get_image"));
-    p_class_from_name = reinterpret_cast<fn_class_from_name_t>(
-        dlsym(lib, "il2cpp_class_from_name"));
-    p_class_get_method_from_name = reinterpret_cast<fn_class_get_method_from_name_t>(
-        dlsym(lib, "il2cpp_class_get_method_from_name"));
-
-    if (p_domain_get == nullptr || p_domain_get_assemblies == nullptr ||
-        p_assembly_get_image == nullptr || p_class_from_name == nullptr ||
-        p_class_get_method_from_name == nullptr) {
-        LOGE("missing IL2CPP exports");
-        return nullptr;
-    }
-
-    // IL2CPP publishes its domain before it has finished initialising. Calling
-    // into it (attach/metadata) at that point dereferences null internal state,
-    // so wait for Unity to finish bringing the runtime up before touching it.
-    LOGI("waiting for IL2CPP");
-    sleep(3);
-
-    Il2CppDomain domain = nullptr;
-    while ((domain = p_domain_get()) == nullptr) usleep(100 * 1000);
     LOGI("IL2CPP ready");
 
-    Il2CppClass* combine = nullptr;
-    Il2CppClass* input = nullptr;
-    while (combine == nullptr || input == nullptr) {
-        if (combine == nullptr) {
-            combine = find_class(domain, "", "CombineResultEffectComponent");
-        }
-        if (input == nullptr) {
-            input = find_class(domain, "UnityEngine", "Input");
-        }
-        if (combine == nullptr || input == nullptr) usleep(200 * 1000);
+    Il2CppClass* combine = find_class(domain, "", "CombineResultEffectComponent");
+    Il2CppClass* input = find_class(domain, "UnityEngine", "Input");
+    if (combine == nullptr || input == nullptr) {
+        LOGE("failed to find game classes (combine=%p input=%p)", combine, input);
+        g_resolved = 0;
+        return;
     }
 
     MethodInfo* set_limit_up =
@@ -240,7 +223,61 @@ void* init_thread(void*) {
     g_on_finish_voice = on_finish_voice;
     g_on_finish_voice_fn = on_finish_voice_ptr;
 
-    LOGI("ready");
+    LOGI("hooks installed");
+}
+
+void* hook_il2cpp_init(const char* domain_name) {
+    void* result = orig_il2cpp_init != nullptr ? orig_il2cpp_init(domain_name) : nullptr;
+    LOGI("il2cpp_init returned");
+    resolve_and_hook();
+    return result;
+}
+
+void* init_thread(void*) {
+    void* lib = nullptr;
+    while (lib == nullptr) {
+        lib = dlopen("libil2cpp.so", RTLD_NOLOAD | RTLD_NOW);
+        if (lib == nullptr) usleep(100 * 1000);
+    }
+
+    p_domain_get = reinterpret_cast<fn_domain_get_t>(dlsym(lib, "il2cpp_domain_get"));
+    p_domain_get_assemblies = reinterpret_cast<fn_domain_get_assemblies_t>(
+        dlsym(lib, "il2cpp_domain_get_assemblies"));
+    p_assembly_get_image = reinterpret_cast<fn_assembly_get_image_t>(
+        dlsym(lib, "il2cpp_assembly_get_image"));
+    p_class_from_name = reinterpret_cast<fn_class_from_name_t>(
+        dlsym(lib, "il2cpp_class_from_name"));
+    p_class_get_method_from_name = reinterpret_cast<fn_class_get_method_from_name_t>(
+        dlsym(lib, "il2cpp_class_get_method_from_name"));
+
+    if (p_domain_get == nullptr || p_domain_get_assemblies == nullptr ||
+        p_assembly_get_image == nullptr || p_class_from_name == nullptr ||
+        p_class_get_method_from_name == nullptr) {
+        LOGE("missing IL2CPP exports");
+        return nullptr;
+    }
+
+    // il2cpp_init is the reliable "runtime is ready" signal. A fixed timer is
+    // not: on a cold start the runtime is still initializing after 3s, and
+    // touching it then segfaults.
+    void* init_addr = dlsym(lib, "il2cpp_init");
+    if (init_addr != nullptr) {
+        if (DobbyHook(init_addr, reinterpret_cast<void*>(hook_il2cpp_init),
+                      reinterpret_cast<void**>(&orig_il2cpp_init)) == 0) {
+            LOGI("hooked il2cpp_init");
+        } else {
+            LOGE("failed to hook il2cpp_init");
+        }
+    } else {
+        LOGE("il2cpp_init not exported");
+    }
+
+    // If IL2CPP was already initialized before our hook was installed, resolve
+    // now (warm start / hook missed the call).
+    if (p_domain_get() != nullptr) {
+        LOGI("IL2CPP already initialized");
+        resolve_and_hook();
+    }
     return nullptr;
 }
 

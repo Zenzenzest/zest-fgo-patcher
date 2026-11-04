@@ -5,7 +5,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-NDK="${NDK:-/tmp/ndk/android-ndk-r27c}"
+NDK="${NDK:-$HOME/ndk/android-ndk-r27c}"
 OUT="$HERE/out"
 
 for abi in arm64-v8a armeabi-v7a; do
