@@ -23,9 +23,10 @@ data class FgoVariant(
 /**
  * The BetterFGO patch.
  *
- * `libavalon.so` is NOT shipped; it is imported from a donor BetterFGO APK and
- * read from [donorRoot] at patch time. `loader.mpe` (libLoader + RestClient stub)
- * is our own code and stays bundled.
+ * For release builds, `libavalon.so` is NOT shipped; it is imported from a
+ * donor BetterFGO APK and read from [donorRoot] at patch time. Test builds skip
+ * it so the in-house recreation can run standalone. `loader.mpe` (libLoader +
+ * RestClient stub) is our own code and stays bundled.
  */
 object FgoPatch {
 
@@ -48,7 +49,14 @@ object FgoPatch {
      * installs alongside the real io.zest.betterfgo.* app instead of replacing
      * it. Flip to false for release builds.
      */
-    const val TEST_BUILD = false
+    const val TEST_BUILD = true
+
+    /**
+     * Release builds keep the donor libavalon until the in-house recreation
+     * reaches parity. Test builds omit it so the new hook is exercised alone.
+     */
+    val avalonRequired = !TEST_BUILD
+
     private val testInfix = if (TEST_BUILD) "test." else ""
     private val testLabel = if (TEST_BUILD) " (test)" else ""
 
@@ -133,21 +141,27 @@ object FgoPatch {
                 }
             }
 
-            // 2. Inject libavalon.so for every ABI we can satisfy.
-            var injected = 0
-            for (abi in targetAbis + extraAbis) {
-                val so = libAvalonFile(donorRoot, variant, abi)
-                if (!so.exists()) continue
-                val dest = get("lib/$abi/libavalon.so", copy = false)
-                dest.parentFile?.mkdirs()
-                dest.writeBytes(so.readBytes())
-                injected++
-            }
-            if (injected == 0) {
-                throw PatchException(
-                    "No ${variant.label} donor available. Import a BetterFGO APK for " +
-                        "${variant.original}.",
-                )
+            // 2. Inject libavalon.so for every ABI we can satisfy. Test builds
+            // skip it entirely so the in-house hook can be validated alone.
+            if (avalonRequired) {
+                var injected = 0
+                for (abi in targetAbis + extraAbis) {
+                    val so = libAvalonFile(donorRoot, variant, abi)
+                    if (!so.exists()) continue
+                    val dest = get("lib/$abi/libavalon.so", copy = false)
+                    dest.parentFile?.mkdirs()
+                    dest.writeBytes(so.readBytes())
+                    injected++
+                }
+                if (injected == 0) {
+                    throw PatchException(
+                        "No ${variant.label} donor available. Import a BetterFGO APK for " +
+                            "${variant.original}.",
+                    )
+                }
+            } else {
+                // Re-patching an already-patched APK must not keep a stale avalon.
+                entries.filter { it.endsWith("/libavalon.so") }.forEach { delete(it) }
             }
 
             // 2b. Inject our ascension tap hook + ShadowHook alongside libavalon.

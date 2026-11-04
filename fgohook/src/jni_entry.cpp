@@ -39,6 +39,7 @@ fn_class_get_method_from_name_t p_class_get_method_from_name = nullptr;
 
 fn_init_t orig_il2cpp_init = nullptr;
 volatile int g_resolved = 0;
+volatile int g_init_done = 0;
 
 // The active ascension result component.
 void* g_instance = nullptr;
@@ -164,8 +165,16 @@ void resolve_and_hook() {
     }
     LOGI("IL2CPP ready");
 
-    Il2CppClass* combine = find_class(domain, "", "CombineResultEffectComponent");
-    Il2CppClass* input = find_class(domain, "UnityEngine", "Input");
+    Il2CppClass* combine = nullptr;
+    Il2CppClass* input = nullptr;
+    // il2cpp_init returns before the game assemblies are fully loaded, so give
+    // them time to appear instead of resolving once and failing.
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        combine = find_class(domain, "", "CombineResultEffectComponent");
+        input = find_class(domain, "UnityEngine", "Input");
+        if (combine != nullptr && input != nullptr) break;
+        usleep(250 * 1000);
+    }
     if (combine == nullptr || input == nullptr) {
         LOGE("failed to find game classes (combine=%p input=%p)", combine, input);
         g_resolved = 0;
@@ -229,7 +238,9 @@ void resolve_and_hook() {
 void* hook_il2cpp_init(const char* domain_name) {
     void* result = orig_il2cpp_init != nullptr ? orig_il2cpp_init(domain_name) : nullptr;
     LOGI("il2cpp_init returned");
-    resolve_and_hook();
+    // The runtime is only safe to touch after the original returns. Signal the
+    // init thread instead of resolving here (this runs on Unity's main thread).
+    g_init_done = 1;
     return result;
 }
 
@@ -259,12 +270,14 @@ void* init_thread(void*) {
 
     // il2cpp_init is the reliable "runtime is ready" signal. A fixed timer is
     // not: on a cold start the runtime is still initializing after 3s, and
-    // touching it then segfaults.
+    // touching it then segfaults. Never call into IL2CPP before this returns.
     void* init_addr = dlsym(lib, "il2cpp_init");
+    bool init_hooked = false;
     if (init_addr != nullptr) {
         if (DobbyHook(init_addr, reinterpret_cast<void*>(hook_il2cpp_init),
                       reinterpret_cast<void**>(&orig_il2cpp_init)) == 0) {
             LOGI("hooked il2cpp_init");
+            init_hooked = true;
         } else {
             LOGE("failed to hook il2cpp_init");
         }
@@ -272,12 +285,20 @@ void* init_thread(void*) {
         LOGE("il2cpp_init not exported");
     }
 
-    // If IL2CPP was already initialized before our hook was installed, resolve
-    // now (warm start / hook missed the call).
-    if (p_domain_get() != nullptr) {
-        LOGI("IL2CPP already initialized");
-        resolve_and_hook();
+    if (!init_hooked) {
+        LOGE("hooks disabled: il2cpp_init hook unavailable");
+        return nullptr;
     }
+
+    // Wait for the runtime's own ready signal, then give Unity a moment to load
+    // the game assemblies before resolving.
+    for (int i = 0; i < 200 && !g_init_done; ++i) usleep(100 * 1000);
+    if (!g_init_done) {
+        LOGE("il2cpp_init was never called");
+        return nullptr;
+    }
+    sleep(2);
+    resolve_and_hook();
     return nullptr;
 }
 

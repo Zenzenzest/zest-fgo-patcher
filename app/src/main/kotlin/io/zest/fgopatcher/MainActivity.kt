@@ -508,7 +508,14 @@ private fun clearVariant(ctx: Context, variant: FgoVariant) {
 private fun donorStatusText(ctx: Context): String {
     val labels = FgoPatch.VARIANTS.filter { variantReady(ctx, it) }
         .map { variant -> readMeta(ctx, variant)?.source?.ifEmpty { null } ?: "FGO donor" }
-    return if (labels.isEmpty()) "No compatible FGO detected (required)" else labels.joinToString(", ")
+    if (labels.isEmpty()) {
+        return if (FgoPatch.avalonRequired) {
+            "No compatible FGO detected (required)"
+        } else {
+            "Test build: no donor needed (avalon omitted)"
+        }
+    }
+    return labels.joinToString(", ")
 }
 
 /**
@@ -757,7 +764,9 @@ private fun inferVariant(manifest: ByteArray?): FgoVariant? {
 private class PatchOutcome(val file: File, val downloadsUri: Uri?)
 
 private fun newWork(ctx: Context): File =
-    File(ctx.cacheDir, "work").apply { deleteRecursively(); mkdirs() }
+    // Fresh, unique directory instead of clearing a shared one: nothing on the
+    // device (including previous work) is ever deleted.
+    File(ctx.cacheDir, "work-${System.currentTimeMillis()}").apply { mkdirs() }
 
 private fun runPatchFromUri(
     ctx: Context,
@@ -850,7 +859,10 @@ private fun patchInput(
     }
     setProgress(85)
 
-    val signed = sign(ctx, unsigned, work, "Patched_$outputBase.apk")
+    // Test outputs get a unique name so an existing patched APK is never
+    // overwritten in Downloads.
+    val suffix = if (FgoPatch.TEST_BUILD) "_test_${System.currentTimeMillis()}" else ""
+    val signed = sign(ctx, unsigned, work, "Patched_$outputBase$suffix.apk")
     setProgress(100)
     return PatchOutcome(signed, publishToDownloads(ctx, signed))
 }

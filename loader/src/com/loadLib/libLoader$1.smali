@@ -18,18 +18,27 @@
 
 # virtual methods
 .method public run()V
-    .locals 2
+    .locals 1
 
+    # libavalon is optional: release builds ship the donor library, test builds
+    # omit it and run only the in-house hook.
+    :try_start_0
     const-string v0, "avalon"
 
     invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
 
-    # libshadowhook.so is a DT_NEEDED dependency of libfgohook.so. Loading it
-    # directly would run its JNI_OnLoad, which expects ShadowHook's Java classes
-    # (not present in the game). The linker loads it without calling JNI_OnLoad.
-    const-string v1, "fgohook"
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
 
-    invoke-static {v1}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+    goto :goto_0
+
+    :catch_0
+    move-exception v0
+
+    :goto_0
+    const-string v0, "fgohook"
+
+    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
 
     return-void
 .end method
