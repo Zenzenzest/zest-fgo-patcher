@@ -9,7 +9,6 @@ import app.morphe.patcher.patch.PatchException
 import app.morphe.patcher.patch.bytecodePatch
 import app.morphe.patcher.patch.resourcePatch
 import org.w3c.dom.Element
-import java.io.File
 import java.util.function.Supplier
 
 /** A supported Fate/Grand Order release. */
@@ -21,44 +20,22 @@ data class FgoVariant(
 )
 
 /**
- * The BetterFGO patch.
+ * Zest's in-house patch.
  *
- * For release builds, `libavalon.so` is NOT shipped; it is imported from a
- * donor BetterFGO APK and read from [donorRoot] at patch time. Test builds skip
- * it so the in-house recreation can run standalone. `loader.mpe` (libLoader +
- * RestClient stub) is our own code and stays bundled.
+ * No donor APK and no libavalon: the bundled libfgohook.so provides 60 FPS,
+ * NP skip, ascension dialogue skip and name fixes. `loader.mpe` is our own code.
  */
 object FgoPatch {
 
     /** Set from the Activity before patching (used only for the bundled loader.mpe). */
     lateinit var assets: AssetManager
 
-    /** Directory holding per-variant donor data: `<donorRoot>/<en|jp>/`. */
-    lateinit var donorRoot: File
-
-    /** When true, also pull whole native sets for ABIs the donor has but the target lacks. */
-    var mergeDonorAbis: Boolean = false
-
     const val UNITY_ACTIVITY = "Lcom/unity3d/player/UnityPlayerActivity;"
     private const val LOADER_CLASS = "Lcom/loadLib/libLoader;"
 
-    val SUPPORTED_ABIS = listOf("arm64-v8a", "armeabi-v7a")
-
-    /**
-     * Temporary test build: output io.zest.test.betterfgo.* so the result
-     * installs alongside the real io.zest.betterfgo.* app instead of replacing
-     * it. Flip to false for release builds.
-     */
-    const val TEST_BUILD = true
-
-    /**
-     * Release builds keep the donor libavalon until the in-house recreation
-     * reaches parity. Test builds omit it so the new hook is exercised alone.
-     */
-    val avalonRequired = !TEST_BUILD
-
-    private val testInfix = if (TEST_BUILD) "test." else ""
-    private val testLabel = if (TEST_BUILD) " (test)" else ""
+    const val TEST_BUILD = false
+    private val testInfix = ""
+    private val testLabel = ""
 
     val VARIANTS = listOf(
         FgoVariant(
@@ -78,15 +55,9 @@ object FgoPatch {
     fun variantOf(packageName: String): FgoVariant? =
         VARIANTS.firstOrNull { it.original == packageName }
 
-    fun donorDir(root: File, variant: FgoVariant) = File(root, variant.key)
-    fun libAvalonFile(root: File, variant: FgoVariant, abi: String) =
-        File(donorDir(root, variant), "libavalon-$abi.so")
-    fun nativeAbiDir(root: File, variant: FgoVariant, abi: String) =
-        File(donorDir(root, variant), "native/$abi")
-
     private val resourcesPatch = resourcePatch(
         name = "BetterFGO resources",
-        description = "Injects libavalon.so, removes AppCheck and rewrites the manifest.",
+        description = "Injects the in-house hook, removes AppCheck and rewrites the manifest.",
         default = false,
     ) {
         execute {
@@ -97,27 +68,6 @@ object FgoPatch {
                         VARIANTS.joinToString { it.original },
                 )
 
-            val dir = donorDir(donorRoot, variant)
-
-            // Merging the donor's extra ABIs copies its game libraries, so the donor
-            // must be the same game version as this XAPK.
-            if (mergeDonorAbis) {
-                val props = java.util.Properties().apply {
-                    val meta = File(dir, "meta.properties")
-                    if (meta.exists()) meta.inputStream().use { load(it) }
-                }
-                val donorVersion = props.getProperty("native.versionName")
-                    ?: props.getProperty("donor.versionName")
-                val targetVersion = packageMetadata.versionName
-                if (donorVersion.isNullOrBlank() || donorVersion == "unknown" || donorVersion != targetVersion) {
-                    throw PatchException(
-                        "Cannot add the donor's armv7 libs: donor version " +
-                            "(${donorVersion ?: "unknown"}) doesn't match this XAPK ($targetVersion). " +
-                            "Turn off the armv7 option or use a matching donor.",
-                    )
-                }
-            }
-
             val entries = listApkEntries()
 
             val targetAbis = entries
@@ -125,55 +75,18 @@ object FgoPatch {
                 .map { it.removePrefix("lib/").substringBefore('/') }
                 .toSortedSet()
 
-            // 1. Optionally pull whole native sets for ABIs the target lacks.
-            val extraAbis = linkedSetOf<String>()
-            if (mergeDonorAbis) {
-                File(dir, "native").listFiles().orEmpty().forEach { abiDir ->
-                    val abi = abiDir.name
-                    if (abi in targetAbis) return@forEach
-                    abiDir.listFiles().orEmpty().forEach { lib ->
-                        if (lib.name == "libFirebaseCppAppCheck.so") return@forEach
-                        val dest = get("lib/$abi/${lib.name}", copy = false)
-                        dest.parentFile?.mkdirs()
-                        dest.writeBytes(lib.readBytes())
-                    }
-                    extraAbis.add(abi)
-                }
-            }
+            // No libavalon in production builds. Remove a stale copy when
+            // re-patching an older patched APK.
+            entries.filter { it.endsWith("/libavalon.so") }.forEach { delete(it) }
 
-            // 2. Inject libavalon.so for every ABI we can satisfy. Test builds
-            // skip it entirely so the in-house hook can be validated alone.
-            if (avalonRequired) {
-                var injected = 0
-                for (abi in targetAbis + extraAbis) {
-                    val so = libAvalonFile(donorRoot, variant, abi)
-                    if (!so.exists()) continue
-                    val dest = get("lib/$abi/libavalon.so", copy = false)
-                    dest.parentFile?.mkdirs()
-                    dest.writeBytes(so.readBytes())
-                    injected++
-                }
-                if (injected == 0) {
-                    throw PatchException(
-                        "No ${variant.label} donor available. Import a BetterFGO APK for " +
-                            "${variant.original}.",
-                    )
-                }
-            } else {
-                // Re-patching an already-patched APK must not keep a stale avalon.
-                entries.filter { it.endsWith("/libavalon.so") }.forEach { delete(it) }
-            }
-
-            // 2b. Inject our ascension tap hook + ShadowHook alongside libavalon.
-            for (abi in targetAbis + extraAbis) {
-                for (name in listOf("libfgohook.so")) {
-                    val hook = runCatching {
-                        assets.open("fgo/hook/$abi/$name").use { it.readBytes() }
-                    }.getOrNull() ?: continue
-                    val dest = get("lib/$abi/$name", copy = false)
-                    dest.parentFile?.mkdirs()
-                    dest.writeBytes(hook)
-                }
+            // Inject the in-house hook for every ABI the target ships.
+            for (abi in targetAbis) {
+                val hook = runCatching {
+                    assets.open("fgo/hook/$abi/libfgohook.so").use { it.readBytes() }
+                }.getOrNull() ?: continue
+                val dest = get("lib/$abi/libfgohook.so", copy = false)
+                dest.parentFile?.mkdirs()
+                dest.writeBytes(hook)
             }
 
             // 3. Drop AppCheck for each ABI.
@@ -239,8 +152,8 @@ object FgoPatch {
     )
 
     val betterFgoPatch = bytecodePatch(
-        name = "BetterFGO (FPS unlock + NP skip)",
-        description = "Unlocks 60 FPS and skips NP animations via libavalon.so.",
+        name = "Zest native hooks (60 FPS, NP skip, ascension, names)",
+        description = "Unlocks 60 FPS, skips NP animations, adds ascension dialogue skip and name fixes via the bundled libfgohook.so.",
         default = true,
     ) {
         compatibleWith(

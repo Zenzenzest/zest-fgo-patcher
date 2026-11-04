@@ -136,21 +136,6 @@ private const val CONTACT_EMAIL = "zenzenzest@gmail.com"
 private const val X_URL = "https://x.com/realzenzenzest"
 private const val DISCORD_HANDLE = "zenzenzest"
 
-/** Installed donor apps we can pull libavalon.so from. */
-private data class DonorApp(val pkg: String, val label: String, val variantKey: String)
-
-private val DONOR_APPS = listOf(
-    DonorApp("io.rayshift.betterfgo.en", "Rayshift FGO (EN)", "en"),
-    DonorApp("io.zest.betterfgo.en", "Zest FGO (EN)", "en"),
-    DonorApp("io.rayshift.betterfgo", "Rayshift FGO JP", "jp"),
-    DonorApp("io.zest.betterfgo", "Zest FGO JP", "jp"),
-)
-
-private fun donorRoot(ctx: Context) = File(ctx.filesDir, "donor")
-
-private fun variantReady(ctx: Context, variant: FgoVariant): Boolean =
-    FgoPatch.SUPPORTED_ABIS.any { FgoPatch.libAvalonFile(donorRoot(ctx), variant, it).exists() }
-
 data class InstalledGame(val pkg: String, val label: String, val versionName: String)
 
 /** Vanilla games installed on this device (base + split APKs can be read for patching). */
@@ -174,7 +159,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         FgoPatch.assets = assets
-        FgoPatch.donorRoot = donorRoot(this)
         setContent {
             FgoPatcherApp()
         }
@@ -190,8 +174,6 @@ fun FgoPatcherApp() {
     val logs = remember { mutableStateListOf<String>() }
     var progress by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
-    var donorStatus by remember { mutableStateOf(donorStatusText(ctx)) }
-    var mergeDonor by remember { mutableStateOf(prefs.getBoolean("merge_abis", false)) }
     var lastOutcome by remember { mutableStateOf<PatchOutcome?>(null) }
     var showAbout by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
@@ -213,32 +195,6 @@ fun FgoPatcherApp() {
         controller.isAppearanceLightNavigationBars = !darkTheme
     }
 
-    LaunchedEffect(Unit) {
-        val status = withContext(Dispatchers.IO) {
-            refreshDonors(ctx, mergeDonor) { message -> main.post { logs.add(message) } }
-        }
-        donorStatus = status
-    }
-
-    val donorPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        busy = true
-        scope.launch {
-            try {
-                val status = withContext(Dispatchers.IO) {
-                    importDonor(ctx, uri, mergeDonor) { message -> main.post { logs.add(message) } }
-                }
-                donorStatus = status
-                snackbar.showSnackbar("Donor updated")
-            } catch (t: Throwable) {
-                main.post { logs.add("donor import failed: ${t.message}") }
-                snackbar.showSnackbar(t.message ?: "Donor import failed")
-            } finally {
-                busy = false
-            }
-        }
-    }
-
     val installedGames = remember { findInstalledGames(ctx) }
     val logSink: (String) -> Unit = { message -> main.post { logs.add(message) } }
     val progressSink: (Int) -> Unit = { value -> main.post { progress = value } }
@@ -250,8 +206,6 @@ fun FgoPatcherApp() {
         lastOutcome = null
         scope.launch {
             try {
-                FgoPatch.donorRoot = donorRoot(ctx)
-                FgoPatch.mergeDonorAbis = mergeDonor
                 val outcome = block()
                 lastOutcome = outcome
                 val downloadsUri = outcome.downloadsUri
@@ -285,22 +239,6 @@ fun FgoPatcherApp() {
             logs = logs,
             progress = progress,
             busy = busy,
-            donorStatus = donorStatus,
-            mergeDonor = mergeDonor,
-            onMergeChange = { enabled ->
-                mergeDonor = enabled
-                prefs.edit().putBoolean("merge_abis", enabled).apply()
-                scope.launch {
-                    busy = true
-                    try {
-                        donorStatus = withContext(Dispatchers.IO) {
-                            refreshDonors(ctx, enabled) { message -> main.post { logs.add(message) } }
-                        }
-                    } finally {
-                        busy = false
-                    }
-                }
-            },
             installReady = lastOutcome != null,
             onInstall = {
                 lastOutcome?.let { outcome ->
@@ -315,15 +253,6 @@ fun FgoPatcherApp() {
                         runPatchFromInstalled(ctx, game.pkg, logSink, progressSink)
                     }
                 }
-            },
-            onImportDonor = {
-                donorPicker.launch(
-                    arrayOf(
-                        "application/vnd.android.package-archive",
-                        "application/zip",
-                        "application/octet-stream",
-                    ),
-                )
             },
             onPick = {
                 apkPicker.launch(
@@ -368,14 +297,10 @@ private fun FgoPatcherScreen(
     logs: List<String>,
     progress: Int,
     busy: Boolean,
-    donorStatus: String,
-    mergeDonor: Boolean,
-    onMergeChange: (Boolean) -> Unit,
     installReady: Boolean,
     onInstall: () -> Unit,
     installedGames: List<InstalledGame>,
     onPatchInstalled: (InstalledGame) -> Unit,
-    onImportDonor: () -> Unit,
     onPick: () -> Unit,
     darkTheme: Boolean,
     onToggleTheme: () -> Unit,
@@ -390,8 +315,6 @@ private fun FgoPatcherScreen(
     val scope = rememberCoroutineScope()
     val scroll = rememberScrollState()
     val patchRequester = remember { BringIntoViewRequester() }
-    val donorRequester = remember { BringIntoViewRequester() }
-    val donorReady = !donorStatus.startsWith("No ")
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -437,11 +360,10 @@ private fun FgoPatcherScreen(
                         onAbout = onAbout,
                         onOpenRepo = onOpenRepo,
                         onJumpPatch = { scope.launch { patchRequester.bringIntoView() } },
-                        onJumpDonor = { scope.launch { donorRequester.bringIntoView() } },
                     )
 
                     Spacer(Modifier.height(if (wide) 36.dp else 26.dp))
-                    Hero(wide = wide, donorReady = donorReady, busy = busy)
+                    Hero(wide = wide, busy = busy)
                     Spacer(Modifier.height(if (wide) 32.dp else 24.dp))
 
                     if (wide) {
@@ -459,15 +381,6 @@ private fun FgoPatcherScreen(
                                     onPatchInstalled = onPatchInstalled,
                                     onPick = onPick,
                                     modifier = Modifier.bringIntoViewRequester(patchRequester),
-                                )
-                                DonorCard(
-                                    donorStatus = donorStatus,
-                                    donorReady = donorReady,
-                                    mergeDonor = mergeDonor,
-                                    onMergeChange = onMergeChange,
-                                    onImportDonor = onImportDonor,
-                                    busy = busy,
-                                    modifier = Modifier.bringIntoViewRequester(donorRequester),
                                 )
                             }
                             Column(
@@ -492,15 +405,6 @@ private fun FgoPatcherScreen(
                                 onPatchInstalled = onPatchInstalled,
                                 onPick = onPick,
                                 modifier = Modifier.bringIntoViewRequester(patchRequester),
-                            )
-                            DonorCard(
-                                donorStatus = donorStatus,
-                                donorReady = donorReady,
-                                mergeDonor = mergeDonor,
-                                onMergeChange = onMergeChange,
-                                onImportDonor = onImportDonor,
-                                busy = busy,
-                                modifier = Modifier.bringIntoViewRequester(donorRequester),
                             )
                             BuildCard(
                                 logs = logs,
@@ -535,7 +439,6 @@ private fun ZestHeader(
     onAbout: () -> Unit,
     onOpenRepo: () -> Unit,
     onJumpPatch: () -> Unit,
-    onJumpDonor: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         BrandMark()
@@ -557,7 +460,6 @@ private fun ZestHeader(
 
         if (wide) {
             TextButton(onClick = onJumpPatch) { Text("Patch") }
-            TextButton(onClick = onJumpDonor) { Text("Donor") }
             TextButton(onClick = onAbout) { Text("About") }
             Spacer(Modifier.width(4.dp))
             IconButton(onClick = onOpenRepo) {
@@ -589,7 +491,7 @@ private fun BrandMark(size: Int = 42) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Hero(wide: Boolean, donorReady: Boolean, busy: Boolean) {
+private fun Hero(wide: Boolean, busy: Boolean) {
     Column {
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -598,11 +500,6 @@ private fun Hero(wide: Boolean, donorReady: Boolean, busy: Boolean) {
             StatusChip(
                 text = if (FgoPatch.TEST_BUILD) "Test build" else "Production",
                 color = MaterialTheme.colorScheme.primary,
-            )
-            StatusChip(
-                text = if (donorReady) "Donor ready" else "Donor needed",
-                color = if (donorReady) MaterialTheme.colorScheme.secondary
-                else MaterialTheme.colorScheme.error,
             )
             if (busy) {
                 StatusChip(text = "Working", color = MaterialTheme.colorScheme.primary)
@@ -802,82 +699,6 @@ private fun InstalledGameRow(
 }
 
 @Composable
-private fun DonorCard(
-    donorStatus: String,
-    donorReady: Boolean,
-    mergeDonor: Boolean,
-    onMergeChange: (Boolean) -> Unit,
-    onImportDonor: () -> Unit,
-    busy: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val statusColor = when {
-        donorStatus.startsWith("No ") -> MaterialTheme.colorScheme.error
-        donorStatus.startsWith("Test build") -> MaterialTheme.colorScheme.secondary
-        else -> MaterialTheme.colorScheme.primary
-    }
-    val statusIcon = when {
-        donorStatus.startsWith("No ") -> Icons.Outlined.ErrorOutline
-        donorStatus.startsWith("Test build") -> Icons.Outlined.Info
-        else -> Icons.Outlined.CheckCircle
-    }
-
-    ZestCard(modifier) {
-        SectionHeader(
-            number = "02",
-            title = "Donor library",
-            subtitle = "Release builds import libavalon from a BetterFGO APK; test builds skip it.",
-        )
-
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-        ) {
-            Row(
-                modifier = Modifier.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(statusIcon, contentDescription = null, tint = statusColor, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    donorStatus,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-
-        OutlinedButton(
-            onClick = onImportDonor,
-            enabled = !busy,
-            modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.medium,
-        ) {
-            Icon(Icons.Outlined.Extension, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(if (donorReady) "Re-import donor APK" else "Import donor APK")
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Include donor extra ABIs (armv7)",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    "Needed only when the target XAPK is arm64-only.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Switch(checked = mergeDonor, onCheckedChange = onMergeChange, enabled = !busy)
-        }
-    }
-}
-
-@Composable
 private fun BuildCard(
     logs: List<String>,
     progress: Int,
@@ -889,7 +710,7 @@ private fun BuildCard(
 ) {
     ZestCard(modifier) {
         SectionHeader(
-            number = "03",
+            number = "02",
             title = "Build",
             subtitle = "Progress and the live patcher log.",
         )
@@ -1151,343 +972,7 @@ private fun ContactRow(
 private fun rememberVersion(ctx: Context): String = remember {
     runCatching {
         ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
-    }.getOrNull() ?: "1.0"
-}
-
-// ---------------------------------------------------------------------------
-// Donor preparation
-// ---------------------------------------------------------------------------
-
-/**
- * Cached metadata for a variant's donor. Written next to the extracted files so
- * we can skip re-extraction and detect stale/absent donors.
- */
-private class DonorMeta {
-    var donorPkg: String = ""
-    var donorVersionCode: Long = 0
-    var donorVersionName: String = ""
-    var manual: Boolean = false
-    var avalonSha256: String = ""
-    var nativePresent: Boolean = false
-    var nativeVersionCode: Long = 0
-    var nativeVersionName: String = ""
-    var source: String = ""
-}
-
-private fun metaFile(ctx: Context, variant: FgoVariant) =
-    File(FgoPatch.donorDir(donorRoot(ctx), variant), "meta.properties")
-
-private fun readMeta(ctx: Context, variant: FgoVariant): DonorMeta? {
-    val file = metaFile(ctx, variant)
-    if (!file.exists()) return null
-    return try {
-        val props = java.util.Properties().apply { file.inputStream().use { load(it) } }
-        DonorMeta().apply {
-            donorPkg = props.getProperty("donor.pkg", "")
-            donorVersionCode = props.getProperty("donor.versionCode", "0").toLongOrNull() ?: 0
-            donorVersionName = props.getProperty("donor.versionName", "")
-            manual = props.getProperty("donor.manual", "false").toBoolean()
-            avalonSha256 = props.getProperty("avalon.sha256", "")
-            nativePresent = props.getProperty("native.present", "false").toBoolean()
-            nativeVersionCode = props.getProperty("native.versionCode", "0").toLongOrNull() ?: 0
-            nativeVersionName = props.getProperty("native.versionName", "")
-            source = props.getProperty("source", "")
-        }
-    } catch (t: Throwable) {
-        null
-    }
-}
-
-private fun writeMeta(ctx: Context, variant: FgoVariant, meta: DonorMeta) {
-    try {
-        val props = java.util.Properties().apply {
-            setProperty("donor.pkg", meta.donorPkg)
-            setProperty("donor.versionCode", meta.donorVersionCode.toString())
-            setProperty("donor.versionName", meta.donorVersionName)
-            setProperty("donor.manual", meta.manual.toString())
-            setProperty("avalon.sha256", meta.avalonSha256)
-            setProperty("native.present", meta.nativePresent.toString())
-            setProperty("native.versionCode", meta.nativeVersionCode.toString())
-            setProperty("native.versionName", meta.nativeVersionName)
-            setProperty("source", meta.source)
-        }
-        metaFile(ctx, variant).apply {
-            parentFile?.mkdirs()
-            outputStream().use { props.store(it, "FGO Patcher donor cache") }
-        }
-    } catch (t: Throwable) {
-        // best effort
-    }
-}
-
-private fun sha256(bytes: ByteArray): String =
-    java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
-        .joinToString("") { "%02x".format(it) }
-
-private fun donorAvalonHash(zip: ZipFile): String {
-    val md = java.security.MessageDigest.getInstance("SHA-256")
-    for (abi in FgoPatch.SUPPORTED_ABIS) {
-        val entry = zip.getEntry("lib/$abi/libavalon.so") ?: continue
-        md.update(abi.toByteArray())
-        zip.getInputStream(entry).use { md.update(it.readBytes()) }
-    }
-    return md.digest().joinToString("") { "%02x".format(it) }
-}
-
-private fun clearVariant(ctx: Context, variant: FgoVariant) {
-    FgoPatch.donorDir(donorRoot(ctx), variant).deleteRecursively()
-}
-
-private fun donorStatusText(ctx: Context): String {
-    val labels = FgoPatch.VARIANTS.filter { variantReady(ctx, it) }
-        .map { variant -> readMeta(ctx, variant)?.source?.ifEmpty { null } ?: "FGO donor" }
-    if (labels.isEmpty()) {
-        return if (FgoPatch.avalonRequired) {
-            "No compatible FGO detected (required)"
-        } else {
-            "Test build: no donor needed (avalon omitted)"
-        }
-    }
-    return labels.joinToString(", ")
-}
-
-/**
- * Detect installed donors, refresh only what changed, and drop caches whose donor
- * app is gone. Returns the status text.
- */
-private fun refreshDonors(ctx: Context, merge: Boolean, log: (String) -> Unit): String {
-    for (variant in FgoPatch.VARIANTS) {
-        // A manual import is an explicit choice; never overwrite it with a
-        // different donor that happens to be installed.
-        val cached = readMeta(ctx, variant)
-        if (cached?.manual == true && variantReady(ctx, variant)) {
-            val version = cached.nativeVersionName.ifBlank { cached.donorVersionName }
-            log("${cached.source.ifEmpty { variant.label }} — using imported donor (v$version)")
-            continue
-        }
-
-        val installed = DONOR_APPS
-            .filter { it.variantKey == variant.key }
-            .mapNotNull { app ->
-                val info = try {
-                    ctx.packageManager.getPackageInfo(app.pkg, 0)
-                } catch (t: Throwable) {
-                    null
-                }
-                if (info != null) app to info else null
-            }
-            .maxByOrNull { (app, info) ->
-                val code = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode
-                           else info.versionCode.toLong()
-                // Newest donor wins; on a tie prefer our own updated app.
-                code * 2 + if (app.pkg.startsWith("io.zest.")) 1 else 0
-            }
-
-        if (installed == null) {
-            val meta = readMeta(ctx, variant)
-            if (meta != null && !meta.manual) {
-                clearVariant(ctx, variant)
-                log("${meta.source.ifEmpty { variant.label }} no longer installed — cleared its cache")
-            }
-            continue
-        }
-
-        val (app, info) = installed
-        val apk = File(info.applicationInfo?.sourceDir ?: continue)
-        if (!apk.canRead()) {
-            log("${app.label} installed but its APK isn't readable — import it manually")
-            continue
-        }
-        prepareFromFile(ctx, apk, variant, app, info, merge, log)
-    }
-    return donorStatusText(ctx)
-}
-
-private fun prepareFromFile(
-    ctx: Context,
-    apk: File,
-    variant: FgoVariant,
-    app: DonorApp,
-    info: android.content.pm.PackageInfo,
-    merge: Boolean,
-    log: (String) -> Unit,
-) {
-    val versionCode = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
-    val versionName = info.versionName ?: ""
-    val meta = readMeta(ctx, variant) ?: DonorMeta()
-
-    ZipFile(apk).use { zip ->
-        val hash = donorAvalonHash(zip)
-        val upToDate = !meta.manual &&
-            meta.donorPkg == app.pkg &&
-            meta.donorVersionCode == versionCode &&
-            meta.avalonSha256 == hash &&
-            variantReady(ctx, variant)
-
-        if (!upToDate) {
-            var extracted = 0
-            for (abi in FgoPatch.SUPPORTED_ABIS) {
-                val entry = zip.getEntry("lib/$abi/libavalon.so") ?: continue
-                val out = FgoPatch.libAvalonFile(donorRoot(ctx), variant, abi)
-                out.parentFile?.mkdirs()
-                zip.getInputStream(entry).use { input -> out.outputStream().use { input.copyTo(it) } }
-                extracted++
-            }
-            if (extracted == 0) return
-            meta.avalonSha256 = hash
-            log("${app.label} — extracted libavalon (v$versionName)")
-        } else {
-            log("${app.label} — cache up to date (v$versionName)")
-        }
-
-        // Keep the metadata in sync even when the libavalon cache was reused;
-        // otherwise a version bump leaves the old donor version recorded.
-        meta.donorPkg = app.pkg
-        meta.donorVersionCode = versionCode
-        meta.donorVersionName = versionName
-        meta.manual = false
-        meta.source = app.label
-
-        if (merge) {
-            val nativeUpToDate = meta.nativePresent &&
-                meta.nativeVersionCode == versionCode &&
-                meta.nativeVersionName == versionName
-            if (!nativeUpToDate) {
-                extractNative(zip, ctx, variant)
-                meta.nativePresent = true
-                meta.nativeVersionCode = versionCode
-                meta.nativeVersionName = versionName
-                log("${app.label} — extracted extra ABIs (v$versionName)")
-            }
-        }
-    }
-    writeMeta(ctx, variant, meta)
-}
-
-private fun extractNative(zip: ZipFile, ctx: Context, variant: FgoVariant) {
-    val abis = linkedSetOf<String>()
-    val all = zip.entries()
-    while (all.hasMoreElements()) {
-        val name = all.nextElement().name
-        if (name.startsWith("lib/")) abis.add(name.removePrefix("lib/").substringBefore('/'))
-    }
-    for (abi in abis.filter { it != "arm64-v8a" }) {
-        FgoPatch.nativeAbiDir(donorRoot(ctx), variant, abi).deleteRecursively()
-        val dir = FgoPatch.nativeAbiDir(donorRoot(ctx), variant, abi).apply { mkdirs() }
-        val entries = zip.entries()
-        while (entries.hasMoreElements()) {
-            val entry = entries.nextElement()
-            if (entry.isDirectory || !entry.name.startsWith("lib/$abi/") || !entry.name.endsWith(".so")) continue
-            if (entry.name.endsWith("libFirebaseCppAppCheck.so")) continue
-            zip.getInputStream(entry).use { input ->
-                File(dir, entry.name.substringAfterLast('/')).outputStream().use { input.copyTo(it) }
-            }
-        }
-    }
-}
-
-private fun importDonor(ctx: Context, uri: Uri, merge: Boolean, log: (String) -> Unit): String {
-    log("importing donor BetterFGO APK…")
-    val temp = File(ctx.cacheDir, "donor-import.apk")
-    try {
-        // Materialize the APK so PackageManager can read the real versionName.
-        // The binary manifest's string pool is UTF-16, so the old regex found
-        // nothing and every manual import was recorded as "unknown".
-        ctx.contentResolver.openInputStream(uri)!!.use { input ->
-            temp.outputStream().use { output -> input.copyTo(output) }
-        }
-
-        val archive = ctx.packageManager.getPackageArchiveInfo(temp.path, 0)
-        val pkg = archive?.packageName.orEmpty()
-        val versionName = archive?.versionName.orEmpty()
-        val versionCode = when {
-            archive == null -> 0L
-            Build.VERSION.SDK_INT >= 28 -> archive.longVersionCode
-            else -> archive.versionCode.toLong()
-        }
-
-        val manifest = ZipFile(temp).use { zip ->
-            zip.getEntry("AndroidManifest.xml")?.let { zip.getInputStream(it).readBytes() }
-        }
-        val variant = variantForPackage(pkg) ?: inferVariant(manifest) ?: run {
-            log("could not tell if that APK is EN or JP")
-            return donorStatusText(ctx)
-        }
-
-        // Drop the previous native set so ABIs from the old donor don't linger.
-        File(FgoPatch.donorDir(donorRoot(ctx), variant), "native").deleteRecursively()
-
-        var avalonFound = 0
-        val avalonParts = StringBuilder()
-        ZipFile(temp).use { zip ->
-            val entries = zip.entries()
-            while (entries.hasMoreElements()) {
-                val entry = entries.nextElement()
-                val name = entry.name
-                if (entry.isDirectory || !name.startsWith("lib/") || !name.endsWith(".so")) continue
-                if (name.endsWith("libFirebaseCppAppCheck.so")) continue
-                val abi = name.removePrefix("lib/").substringBefore('/')
-                val fileName = name.substringAfterLast('/')
-                if (fileName != "libavalon.so" && (!merge || abi == "arm64-v8a")) continue
-                val bytes = zip.getInputStream(entry).readBytes()
-                val dest = if (fileName == "libavalon.so") {
-                    FgoPatch.libAvalonFile(donorRoot(ctx), variant, abi)
-                } else {
-                    File(FgoPatch.nativeAbiDir(donorRoot(ctx), variant, abi), fileName)
-                }
-                dest.parentFile?.mkdirs()
-                dest.writeBytes(bytes)
-                if (fileName == "libavalon.so") {
-                    avalonFound++
-                    avalonParts.append(abi).append(sha256(bytes))
-                }
-            }
-        }
-        if (avalonFound == 0) {
-            log("no libavalon.so found — is that an existing BetterFGO APK?")
-            return donorStatusText(ctx)
-        }
-
-        val resolvedVersion = versionName.ifBlank { "unknown" }
-        writeMeta(
-            ctx,
-            variant,
-            DonorMeta().apply {
-                donorPkg = pkg.ifBlank { "manual" }
-                donorVersionCode = versionCode
-                donorVersionName = resolvedVersion
-                manual = true
-                avalonSha256 = sha256(avalonParts.toString().toByteArray())
-                nativePresent = merge
-                nativeVersionCode = versionCode
-                nativeVersionName = resolvedVersion
-                source = "Donor FGO (${variant.key.uppercase()})"
-            },
-        )
-        log("donor imported for ${variant.label} (v$resolvedVersion)")
-        return donorStatusText(ctx)
-    } finally {
-        temp.delete()
-    }
-}
-
-private fun variantForPackage(pkg: String): FgoVariant? = when {
-    pkg.endsWith(".en") -> FgoPatch.VARIANTS.firstOrNull { it.key == "en" }
-    pkg.contains("fategrandorder") || pkg.contains("betterfgo") ->
-        FgoPatch.VARIANTS.firstOrNull { it.key == "jp" }
-    else -> null
-}
-
-private fun inferVariant(manifest: ByteArray?): FgoVariant? {
-    val bytes = manifest ?: return null
-    val text = String(bytes, Charsets.ISO_8859_1)
-    val en = text.contains("betterfgo.en") || text.contains("fategrandorder.en")
-    val jp = text.contains("fategrandorder") || text.contains("betterfgo")
-    return when {
-        en -> FgoPatch.VARIANTS.first { it.key == "en" }
-        jp -> FgoPatch.VARIANTS.first { it.key == "jp" }
-        else -> null
-    }
+    }.getOrNull() ?: "1.1"
 }
 
 // ---------------------------------------------------------------------------
@@ -1581,7 +1066,7 @@ private fun patchInput(
         }
         if (failed) {
             throw IllegalStateException(
-                "Patching failed. Is this the right game (EN/NA or JP) and is its donor available?",
+                "Patching failed. Is this the right game (EN/NA or JP)?",
             )
         }
         setProgress(70)

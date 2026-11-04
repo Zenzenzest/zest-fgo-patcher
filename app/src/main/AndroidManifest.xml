@@ -5,10 +5,6 @@
 
     <!-- Make potential donor apps visible so we can read their APK (Android 11+). -->
     <queries>
-        <package android:name="io.rayshift.betterfgo.en" />
-        <package android:name="io.zest.betterfgo.en" />
-        <package android:name="io.rayshift.betterfgo" />
-        <package android:name="io.zest.betterfgo" />
         <package android:name="com.aniplex.fategrandorder.en" />
         <package android:name="com.aniplex.fategrandorder" />
     </queries>
