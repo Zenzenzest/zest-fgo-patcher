@@ -1,5 +1,6 @@
 package io.zest.fgopatcher
 
+import android.app.Activity
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -15,31 +16,75 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AlternateEmail
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -49,19 +94,31 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
 import app.morphe.patcher.Patcher
 import app.morphe.patcher.PatcherConfig
 import app.morphe.patcher.apk.ApkMerger
 import app.morphe.patcher.apk.ApkSigner
 import app.morphe.patcher.apk.ApkUtils
 import app.morphe.patcher.apk.ApkUtils.applyTo
+import io.zest.fgopatcher.ui.theme.ZestTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -74,6 +131,10 @@ import java.util.zip.ZipInputStream
 
 private const val VANILLA_APP_URL = "https://fgo.bigcereal.com/"
 private const val PREFS = "fgo_patcher"
+private const val REPO_URL = "https://github.com/Zenzenzest/zest-fgo-patcher"
+private const val CONTACT_EMAIL = "zenzenzest@gmail.com"
+private const val X_URL = "https://x.com/realzenzenzest"
+private const val DISCORD_HANDLE = "zenzenzest"
 
 /** Installed donor apps we can pull libavalon.so from. */
 private data class DonorApp(val pkg: String, val label: String, val variantKey: String)
@@ -111,12 +172,11 @@ private fun findInstalledGames(ctx: Context): List<InstalledGame> {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         FgoPatch.assets = assets
         FgoPatch.donorRoot = donorRoot(this)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                FgoPatcherApp()
-            }
+            FgoPatcherApp()
         }
     }
 }
@@ -124,18 +184,35 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun FgoPatcherApp() {
     val ctx = LocalContext.current
+    val prefs = remember { ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
+    var darkTheme by remember { mutableStateOf(prefs.getBoolean("dark_theme", true)) }
     val scope = rememberCoroutineScope()
     val logs = remember { mutableStateListOf<String>() }
     var progress by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var donorStatus by remember { mutableStateOf(donorStatusText(ctx)) }
-    var mergeDonor by remember {
-        mutableStateOf(ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("merge_abis", false))
-    }
+    var mergeDonor by remember { mutableStateOf(prefs.getBoolean("merge_abis", false)) }
     var lastOutcome by remember { mutableStateOf<PatchOutcome?>(null) }
+    var showAbout by remember { mutableStateOf(false) }
+    val snackbar = remember { SnackbarHostState() }
     val main = remember { Handler(Looper.getMainLooper()) }
+    val uriHandler = LocalUriHandler.current
+    val clipboard = LocalClipboardManager.current
+    val version = rememberVersion(ctx)
+    val view = LocalView.current
 
-    // Detect installed donors on launch.
+    fun copyDiscord() {
+        clipboard.setText(AnnotatedString(DISCORD_HANDLE))
+        scope.launch { snackbar.showSnackbar("Discord handle copied") }
+    }
+
+    SideEffect {
+        val activity = ctx as? Activity ?: return@SideEffect
+        val controller = WindowCompat.getInsetsController(activity.window, view)
+        controller.isAppearanceLightStatusBars = !darkTheme
+        controller.isAppearanceLightNavigationBars = !darkTheme
+    }
+
     LaunchedEffect(Unit) {
         val status = withContext(Dispatchers.IO) {
             refreshDonors(ctx, mergeDonor) { message -> main.post { logs.add(message) } }
@@ -152,8 +229,10 @@ fun FgoPatcherApp() {
                     importDonor(ctx, uri, mergeDonor) { message -> main.post { logs.add(message) } }
                 }
                 donorStatus = status
+                snackbar.showSnackbar("Donor updated")
             } catch (t: Throwable) {
                 main.post { logs.add("donor import failed: ${t.message}") }
+                snackbar.showSnackbar(t.message ?: "Donor import failed")
             } finally {
                 busy = false
             }
@@ -161,7 +240,6 @@ fun FgoPatcherApp() {
     }
 
     val installedGames = remember { findInstalledGames(ctx) }
-
     val logSink: (String) -> Unit = { message -> main.post { logs.add(message) } }
     val progressSink: (Int) -> Unit = { value -> main.post { progress = value } }
 
@@ -183,9 +261,10 @@ fun FgoPatcherApp() {
                 } else {
                     installFile(ctx, outcome.file)
                 }
+                snackbar.showSnackbar("Patched APK ready")
             } catch (t: Throwable) {
                 logs.add("ERROR: ${t.message}")
-                Toast.makeText(ctx, "Failed: ${t.message}", Toast.LENGTH_LONG).show()
+                snackbar.showSnackbar(t.message ?: "Patch failed")
             } finally {
                 busy = false
             }
@@ -201,57 +280,91 @@ fun FgoPatcherApp() {
         }
     }
 
-    FgoPatcherScreen(
-        logs = logs,
-        progress = progress,
-        busy = busy,
-        donorStatus = donorStatus,
-        mergeDonor = mergeDonor,
-        onMergeChange = { enabled ->
-            mergeDonor = enabled
-            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putBoolean("merge_abis", enabled).apply()
-            scope.launch {
-                busy = true
-                try {
-                    donorStatus = withContext(Dispatchers.IO) {
-                        refreshDonors(ctx, enabled) { message -> main.post { logs.add(message) } }
+    ZestTheme(darkTheme = darkTheme) {
+        FgoPatcherScreen(
+            logs = logs,
+            progress = progress,
+            busy = busy,
+            donorStatus = donorStatus,
+            mergeDonor = mergeDonor,
+            onMergeChange = { enabled ->
+                mergeDonor = enabled
+                prefs.edit().putBoolean("merge_abis", enabled).apply()
+                scope.launch {
+                    busy = true
+                    try {
+                        donorStatus = withContext(Dispatchers.IO) {
+                            refreshDonors(ctx, enabled) { message -> main.post { logs.add(message) } }
+                        }
+                    } finally {
+                        busy = false
                     }
-                } finally {
-                    busy = false
                 }
-            }
-        },
-        installReady = lastOutcome != null,
-        onInstall = {
-            lastOutcome?.let { outcome ->
-                val uri = outcome.downloadsUri
-                if (uri != null) installUri(ctx, uri) else installFile(ctx, outcome.file)
-            }
-        },
-        onImportDonor = {
-            donorPicker.launch(
-                arrayOf("application/vnd.android.package-archive", "application/zip", "application/octet-stream"),
-            )
-        },
-        installedGames = installedGames,
-        onPatchInstalled = { game ->
-            launchPatch {
-                withContext(Dispatchers.IO) {
-                    runPatchFromInstalled(ctx, game.pkg, logSink, progressSink)
+            },
+            installReady = lastOutcome != null,
+            onInstall = {
+                lastOutcome?.let { outcome ->
+                    val uri = outcome.downloadsUri
+                    if (uri != null) installUri(ctx, uri) else installFile(ctx, outcome.file)
                 }
-            }
-        },
-        onPick = {
-            apkPicker.launch(
-                arrayOf("application/zip", "application/octet-stream", "application/vnd.android.package-archive"),
+            },
+            installedGames = installedGames,
+            onPatchInstalled = { game ->
+                launchPatch {
+                    withContext(Dispatchers.IO) {
+                        runPatchFromInstalled(ctx, game.pkg, logSink, progressSink)
+                    }
+                }
+            },
+            onImportDonor = {
+                donorPicker.launch(
+                    arrayOf(
+                        "application/vnd.android.package-archive",
+                        "application/zip",
+                        "application/octet-stream",
+                    ),
+                )
+            },
+            onPick = {
+                apkPicker.launch(
+                    arrayOf(
+                        "application/zip",
+                        "application/octet-stream",
+                        "application/vnd.android.package-archive",
+                    ),
+                )
+            },
+            darkTheme = darkTheme,
+            onToggleTheme = {
+                val next = !darkTheme
+                darkTheme = next
+                prefs.edit().putBoolean("dark_theme", next).apply()
+            },
+            onAbout = { showAbout = true },
+            onOpenRepo = { uriHandler.openUri(REPO_URL) },
+            onEmail = { uriHandler.openUri("mailto:$CONTACT_EMAIL") },
+            onX = { uriHandler.openUri(X_URL) },
+            onDiscord = { copyDiscord() },
+            snackbar = snackbar,
+            version = version,
+        )
+
+        if (showAbout) {
+            AboutDialog(
+                onDismiss = { showAbout = false },
+                version = version,
+                onOpenRepo = { uriHandler.openUri(REPO_URL) },
+                onEmail = { uriHandler.openUri("mailto:$CONTACT_EMAIL") },
+                onX = { uriHandler.openUri(X_URL) },
+                onDiscord = { copyDiscord() },
             )
-        },
-    )
+        }
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun FgoPatcherScreen(
+private fun FgoPatcherScreen(
     logs: List<String>,
     progress: Int,
     busy: Boolean,
@@ -264,161 +377,789 @@ fun FgoPatcherScreen(
     onPatchInstalled: (InstalledGame) -> Unit,
     onImportDonor: () -> Unit,
     onPick: () -> Unit,
+    darkTheme: Boolean,
+    onToggleTheme: () -> Unit,
+    onAbout: () -> Unit,
+    onOpenRepo: () -> Unit,
+    onEmail: () -> Unit,
+    onX: () -> Unit,
+    onDiscord: () -> Unit,
+    snackbar: SnackbarHostState,
+    version: String,
 ) {
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .systemBarsPadding()
-                .padding(start = 24.dp, end = 24.dp, top = 28.dp, bottom = 24.dp),
+    val scope = rememberCoroutineScope()
+    val scroll = rememberScrollState()
+    val patchRequester = remember { BringIntoViewRequester() }
+    val donorRequester = remember { BringIntoViewRequester() }
+    val donorReady = !donorStatus.startsWith("No ")
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbar) },
+    ) { inner ->
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxSize().padding(inner),
         ) {
-            Text("FGO Patcher", style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Select the vanilla Fate/Grand Order .xapk (English/NA or Japanese). " +
-                    "It will be merged, patched (FPS unlock + NP skip) and signed on-device.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(10.dp))
-            val uriHandler = LocalUriHandler.current
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Download the Vanilla App Here: ", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "fgo.bigcereal.com",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    textDecoration = TextDecoration.Underline,
-                    modifier = Modifier.clickable { uriHandler.openUri(VANILLA_APP_URL) },
+            val wide = maxWidth >= 900.dp
+            val horizontal = if (wide) 32.dp else 20.dp
+
+            Box(Modifier.matchParentSize()) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(460.dp)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                                    Color.Transparent,
+                                ),
+                                radius = 1100f,
+                            ),
+                        ),
                 )
             }
 
-            Spacer(Modifier.height(16.dp))
-            Text(
-                donorStatus,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (donorStatus.startsWith("No ")) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.primary,
-            )
-            if (donorStatus.startsWith("No ")) {
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onImportDonor, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                    Text("Import donor BetterFGO APK")
-                }
-            } else {
-                TextButton(onClick = onImportDonor, enabled = !busy) {
-                    Text("Re-import / change donor")
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(checked = mergeDonor, onCheckedChange = onMergeChange, enabled = !busy)
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    "Also include the donor's extra ABIs (armv7)",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = onPick,
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth(),
+            Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(scroll),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(if (busy) "Working…" else "Select FGO XAPK and patch")
-            }
-
-            if (installedGames.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "Or patch the game already installed on this phone:",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    "Your vanilla game is only read — it won't be modified. " +
-                        "The patched copy installs as a separate app.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(6.dp))
-                installedGames.forEach { game ->
-                    OutlinedButton(
-                        onClick = { onPatchInstalled(game) },
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Patch installed ${game.label} (v${game.versionName})")
-                    }
-                    Spacer(Modifier.height(6.dp))
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            LinearProgressIndicator(
-                progress = { progress / 100f },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(12.dp))
-            Card(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 Column(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(12.dp)
-                        .verticalScroll(rememberScrollState()),
+                        .widthIn(max = 1120.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = horizontal, vertical = 20.dp),
                 ) {
-                    logs.forEach {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        )
-                    }
-                }
-            }
+                    ZestHeader(
+                        wide = wide,
+                        darkTheme = darkTheme,
+                        onToggleTheme = onToggleTheme,
+                        onAbout = onAbout,
+                        onOpenRepo = onOpenRepo,
+                        onJumpPatch = { scope.launch { patchRequester.bringIntoView() } },
+                        onJumpDonor = { scope.launch { donorRequester.bringIntoView() } },
+                    )
 
-            if (installReady) {
-                Spacer(Modifier.height(12.dp))
-                Button(
-                    onClick = onInstall,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Install patched FGO")
+                    Spacer(Modifier.height(if (wide) 36.dp else 26.dp))
+                    Hero(wide = wide, donorReady = donorReady, busy = busy)
+                    Spacer(Modifier.height(if (wide) 32.dp else 24.dp))
+
+                    if (wide) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(20.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1.05f),
+                                verticalArrangement = Arrangement.spacedBy(20.dp),
+                            ) {
+                                ChooseGameCard(
+                                    games = installedGames,
+                                    busy = busy,
+                                    onPatchInstalled = onPatchInstalled,
+                                    onPick = onPick,
+                                    modifier = Modifier.bringIntoViewRequester(patchRequester),
+                                )
+                                DonorCard(
+                                    donorStatus = donorStatus,
+                                    donorReady = donorReady,
+                                    mergeDonor = mergeDonor,
+                                    onMergeChange = onMergeChange,
+                                    onImportDonor = onImportDonor,
+                                    busy = busy,
+                                    modifier = Modifier.bringIntoViewRequester(donorRequester),
+                                )
+                            }
+                            Column(
+                                modifier = Modifier.weight(0.95f),
+                                verticalArrangement = Arrangement.spacedBy(20.dp),
+                            ) {
+                                BuildCard(
+                                    logs = logs,
+                                    progress = progress,
+                                    busy = busy,
+                                    installReady = installReady,
+                                    onInstall = onInstall,
+                                    logHeight = 330.dp,
+                                )
+                            }
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            ChooseGameCard(
+                                games = installedGames,
+                                busy = busy,
+                                onPatchInstalled = onPatchInstalled,
+                                onPick = onPick,
+                                modifier = Modifier.bringIntoViewRequester(patchRequester),
+                            )
+                            DonorCard(
+                                donorStatus = donorStatus,
+                                donorReady = donorReady,
+                                mergeDonor = mergeDonor,
+                                onMergeChange = onMergeChange,
+                                onImportDonor = onImportDonor,
+                                busy = busy,
+                                modifier = Modifier.bringIntoViewRequester(donorRequester),
+                            )
+                            BuildCard(
+                                logs = logs,
+                                progress = progress,
+                                busy = busy,
+                                installReady = installReady,
+                                onInstall = onInstall,
+                                logHeight = 220.dp,
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(28.dp))
+                    ZestFooter(
+                        version = version,
+                        onOpenRepo = onOpenRepo,
+                        onEmail = onEmail,
+                        onX = onX,
+                        onDiscord = onDiscord,
+                    )
                 }
             }
         }
     }
 }
 
-@Preview(showBackground = true, widthDp = 380, heightDp = 820)
 @Composable
-private fun FgoPatcherScreenPreview() {
-    MaterialTheme(colorScheme = darkColorScheme()) {
-        FgoPatcherScreen(
-            logs = listOf(
-                "input: vanilla_2395.xapk (81 MiB)",
-                "merging split archive…",
-                "merged: 72 MiB",
-                "applied: BetterFGO (FPS unlock + NP skip)",
-                "patched: 72 MiB",
-                "signing…",
-                "saved to Downloads/Patched_vanilla_2395.apk",
-            ),
-            progress = 100,
-            busy = false,
-            donorStatus = "Rayshift FGO (EN), Rayshift FGO JP",
-            mergeDonor = true,
-            onMergeChange = {},
-            installReady = true,
-            onInstall = {},
-            installedGames = listOf(
-                InstalledGame("com.aniplex.fategrandorder.en", "Fate/GO EN", "2.95.0"),
-            ),
-            onPatchInstalled = {},
-            onImportDonor = {},
-            onPick = {},
+private fun ZestHeader(
+    wide: Boolean,
+    darkTheme: Boolean,
+    onToggleTheme: () -> Unit,
+    onAbout: () -> Unit,
+    onOpenRepo: () -> Unit,
+    onJumpPatch: () -> Unit,
+    onJumpDonor: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        BrandMark()
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(
+                "Zest",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "FGO PATCHER",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Spacer(Modifier.weight(1f))
+
+        if (wide) {
+            TextButton(onClick = onJumpPatch) { Text("Patch") }
+            TextButton(onClick = onJumpDonor) { Text("Donor") }
+            TextButton(onClick = onAbout) { Text("About") }
+            Spacer(Modifier.width(4.dp))
+            IconButton(onClick = onOpenRepo) {
+                Icon(Icons.Outlined.Code, "Open GitHub repository")
+            }
+        } else {
+            IconButton(onClick = onAbout) {
+                Icon(Icons.Outlined.Info, "About")
+            }
+        }
+
+        IconButton(onClick = onToggleTheme) {
+            Icon(
+                imageVector = if (darkTheme) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                contentDescription = if (darkTheme) "Switch to light theme" else "Switch to dark theme",
+            )
+        }
+    }
+}
+
+@Composable
+private fun BrandMark(size: Int = 42) {
+    Box(
+        modifier = Modifier
+            .size(size.dp)
+            .clip(RoundedCornerShape((size * 0.3f).dp))
+            .background(Color(0xFFC1A38E)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            painter = painterResource(R.mipmap.ic_launcher_foreground),
+            contentDescription = "Zest FGO Patcher icon",
+            modifier = Modifier.fillMaxSize(),
         )
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun Hero(wide: Boolean, donorReady: Boolean, busy: Boolean) {
+    Column {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            StatusChip(
+                text = if (FgoPatch.TEST_BUILD) "Test build" else "Production",
+                color = MaterialTheme.colorScheme.primary,
+            )
+            StatusChip(
+                text = if (donorReady) "Donor ready" else "Donor needed",
+                color = if (donorReady) MaterialTheme.colorScheme.secondary
+                else MaterialTheme.colorScheme.error,
+            )
+            if (busy) {
+                StatusChip(text = "Working", color = MaterialTheme.colorScheme.primary)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Patch Fate/Grand Order",
+            style = if (wide) MaterialTheme.typography.displaySmall
+            else MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "60 FPS, NP Skip, Name Fixes, And Ascension Dialogue Skip.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.widthIn(max = 760.dp),
+        )
+        if (FgoPatch.TEST_BUILD) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "This build installs as io.zest.test.betterfgo.* and sits next to your production app.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusChip(text: String, color: Color) {
+    Surface(
+        shape = CircleShape,
+        color = color.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.35f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(color))
+            Spacer(Modifier.width(7.dp))
+            Text(
+                text,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(number: String, title: String, subtitle: String? = null) {
+    Row(verticalAlignment = Alignment.Top) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                number,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            if (subtitle != null) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ZestCard(
+    modifier: Modifier = Modifier,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun ChooseGameCard(
+    games: List<InstalledGame>,
+    busy: Boolean,
+    onPatchInstalled: (InstalledGame) -> Unit,
+    onPick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val uriHandler = LocalUriHandler.current
+    ZestCard(modifier) {
+        SectionHeader(
+            number = "01",
+            title = "Choose your game",
+            subtitle = "Patch the vanilla install on this phone, or pick an XAPK.",
+        )
+
+        if (games.isEmpty()) {
+            Text(
+                "No vanilla Fate/Grand Order found on this phone.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            games.forEach { game ->
+                InstalledGameRow(game = game, busy = busy) { onPatchInstalled(game) }
+            }
+        }
+
+        Button(
+            onClick = onPick,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = MaterialTheme.shapes.medium,
+        ) {
+            Icon(Icons.Outlined.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Select XAPK and patch")
+        }
+
+        TextButton(
+            onClick = { uriHandler.openUri(VANILLA_APP_URL) },
+            contentPadding = PaddingValues(0.dp),
+        ) {
+            Text(
+                "Need the vanilla app? fgo.bigcereal.com",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InstalledGameRow(
+    game: InstalledGame,
+    busy: Boolean,
+    onPatch: () -> Unit,
+) {
+    Surface(
+        onClick = onPatch,
+        enabled = !busy,
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.SportsEsports,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(game.label, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "v${game.versionName} • ${game.pkg}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                Icons.Outlined.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DonorCard(
+    donorStatus: String,
+    donorReady: Boolean,
+    mergeDonor: Boolean,
+    onMergeChange: (Boolean) -> Unit,
+    onImportDonor: () -> Unit,
+    busy: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val statusColor = when {
+        donorStatus.startsWith("No ") -> MaterialTheme.colorScheme.error
+        donorStatus.startsWith("Test build") -> MaterialTheme.colorScheme.secondary
+        else -> MaterialTheme.colorScheme.primary
+    }
+    val statusIcon = when {
+        donorStatus.startsWith("No ") -> Icons.Outlined.ErrorOutline
+        donorStatus.startsWith("Test build") -> Icons.Outlined.Info
+        else -> Icons.Outlined.CheckCircle
+    }
+
+    ZestCard(modifier) {
+        SectionHeader(
+            number = "02",
+            title = "Donor library",
+            subtitle = "Release builds import libavalon from a BetterFGO APK; test builds skip it.",
+        )
+
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(statusIcon, contentDescription = null, tint = statusColor, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    donorStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        OutlinedButton(
+            onClick = onImportDonor,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
+        ) {
+            Icon(Icons.Outlined.Extension, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(if (donorReady) "Re-import donor APK" else "Import donor APK")
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Include donor extra ABIs (armv7)",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    "Needed only when the target XAPK is arm64-only.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(checked = mergeDonor, onCheckedChange = onMergeChange, enabled = !busy)
+        }
+    }
+}
+
+@Composable
+private fun BuildCard(
+    logs: List<String>,
+    progress: Int,
+    busy: Boolean,
+    installReady: Boolean,
+    onInstall: () -> Unit,
+    logHeight: Dp,
+    modifier: Modifier = Modifier,
+) {
+    ZestCard(modifier) {
+        SectionHeader(
+            number = "03",
+            title = "Build",
+            subtitle = "Progress and the live patcher log.",
+        )
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (busy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(
+                text = when {
+                    busy -> "Working…"
+                    installReady -> "Ready to install"
+                    else -> "Idle"
+                },
+                style = MaterialTheme.typography.titleMedium,
+                color = if (busy) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                "$progress%",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        LinearProgressIndicator(
+            progress = { progress / 100f },
+            modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            drawStopIndicator = {},
+        )
+
+        if (installReady) {
+            Button(
+                onClick = onInstall,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = MaterialTheme.shapes.medium,
+            ) {
+                Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Install patched FGO")
+            }
+        }
+
+        LogPanel(logs = logs, height = logHeight)
+    }
+}
+
+@Composable
+private fun LogPanel(logs: List<String>, height: Dp) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = Color(0xFF07090C),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondary))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "PATCHER LOG",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF8A94A6),
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "${logs.size} lines",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF5C6678),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            if (logs.isEmpty()) {
+                Text(
+                    "Logs will appear here when you start a patch.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF6B7688),
+                )
+            } else {
+                val state = rememberLazyListState()
+                LaunchedEffect(logs.size) {
+                    state.animateScrollToItem(logs.lastIndex)
+                }
+                LazyColumn(
+                    state = state,
+                    modifier = Modifier.fillMaxWidth().height(height),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    items(logs) { line ->
+                        val isError = line.startsWith("ERROR") || line.contains("FAILED")
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp,
+                            ),
+                            color = if (isError) Color(0xFFFF8080) else Color(0xFFC9D1DC),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ZestFooter(
+    version: String,
+    onOpenRepo: () -> Unit,
+    onEmail: () -> Unit,
+    onX: () -> Unit,
+    onDiscord: () -> Unit,
+) {
+    Column {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+        Spacer(Modifier.height(18.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Built by ZenZenZest",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                "v$version • ${if (FgoPatch.TEST_BUILD) "Test build" else "Production"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ContactChip("GitHub", Icons.Outlined.Code, onOpenRepo)
+            ContactChip("Email", Icons.Outlined.Email, onEmail)
+            ContactChip("X / Twitter", Icons.Outlined.AlternateEmail, onX)
+            ContactChip("Discord · $DISCORD_HANDLE", Icons.Outlined.Forum, onDiscord)
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Not affiliated with Aniplex, Lasengle, Type-Moon, or Rayshift. Game files are not included.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ContactChip(label: String, icon: ImageVector, onClick: () -> Unit) {
+    AssistChip(
+        onClick = onClick,
+        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+        leadingIcon = {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+        },
+        shape = CircleShape,
+    )
+}
+
+@Composable
+private fun AboutDialog(
+    onDismiss: () -> Unit,
+    version: String,
+    onOpenRepo: () -> Unit,
+    onEmail: () -> Unit,
+    onX: () -> Unit,
+    onDiscord: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { BrandMark(40) },
+        title = { Text("Zest FGO Patcher", style = MaterialTheme.typography.titleLarge) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "On-device patching for Fate/Grand Order EN and JP.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Version $version • ${if (FgoPatch.TEST_BUILD) "Test build" else "Production"}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                Text(
+                    "CONTACT",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ContactRow(Icons.Outlined.Code, "GitHub repository", onOpenRepo)
+                ContactRow(Icons.Outlined.Email, CONTACT_EMAIL, onEmail)
+                ContactRow(Icons.Outlined.AlternateEmail, "@realzenzenzest", onX)
+                ContactRow(Icons.Outlined.Forum, "Discord: $DISCORD_HANDLE (tap to copy)", onDiscord, Icons.Outlined.ContentCopy)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                Text(
+                    "Not affiliated with Aniplex, Lasengle, Type-Moon, or Rayshift.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        containerColor = MaterialTheme.colorScheme.surface,
+    )
+}
+
+@Composable
+private fun ContactRow(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    trailingIcon: ImageVector = Icons.Outlined.OpenInNew,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            trailingIcon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+@Suppress("DEPRECATION")
+@Composable
+private fun rememberVersion(ctx: Context): String = remember {
+    runCatching {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+    }.getOrNull() ?: "1.0"
 }
 
 // ---------------------------------------------------------------------------
