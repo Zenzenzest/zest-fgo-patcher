@@ -200,32 +200,18 @@ void resolve_and_hook() {
     }
     LOGI("IL2CPP ready");
 
-    Il2CppClass* combine = nullptr;
-    Il2CppClass* input = nullptr;
-    // il2cpp_init returns before the game assemblies are fully loaded, so give
-    // them time to appear instead of resolving once and failing.
-    for (int attempt = 0; attempt < 40; ++attempt) {
-        combine = find_class(domain, "", "CombineResultEffectComponent");
-        input = find_class(domain, "UnityEngine", "Input");
-        if (combine != nullptr && input != nullptr) break;
-        usleep(250 * 1000);
+    // Unity's core classes are available as soon as il2cpp_init returns. Hook
+    // the display methods first: the game applies its startup frame rate and
+    // timeScale before the game assemblies are loaded, and a later install
+    // would miss those calls.
+    Il2CppClass* application = nullptr;
+    Il2CppClass* time = nullptr;
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        application = find_class(domain, "UnityEngine", "Application");
+        time = find_class(domain, "UnityEngine", "Time");
+        if (application != nullptr && time != nullptr) break;
+        usleep(50 * 1000);
     }
-    if (combine == nullptr || input == nullptr) {
-        LOGE("failed to find game classes (combine=%p input=%p)", combine, input);
-        g_resolved = 0;
-        return;
-    }
-
-    Il2CppClass* application = find_class(domain, "UnityEngine", "Application");
-    Il2CppClass* time = find_class(domain, "UnityEngine", "Time");
-
-    MethodInfo* set_limit_up =
-        p_class_get_method_from_name(combine, "SetLimitUpCombineInfo", 10);
-    MethodInfo* click_next = p_class_get_method_from_name(combine, "clickNext", 0);
-    MethodInfo* close = p_class_get_method_from_name(combine, "Close", 0);
-    MethodInfo* stop_voice = p_class_get_method_from_name(combine, "stopVoice", 0);
-    MethodInfo* on_finish_voice = p_class_get_method_from_name(combine, "OnFinishVoice", 1);
-    MethodInfo* touch_count = p_class_get_method_from_name(input, "get_touchCount", 0);
     MethodInfo* set_target_frame_rate = application != nullptr
         ? p_class_get_method_from_name(application, "set_targetFrameRate", 1)
         : nullptr;
@@ -236,46 +222,13 @@ void resolve_and_hook() {
         ? p_class_get_method_from_name(time, "get_timeScale", 0)
         : nullptr;
 
-    void* set_limit_up_ptr = method_ptr(set_limit_up);
-    void* click_next_ptr = method_ptr(click_next);
-    void* close_ptr = method_ptr(close);
-    void* stop_voice_ptr = method_ptr(stop_voice);
-    void* on_finish_voice_ptr = method_ptr(on_finish_voice);
-    void* touch_count_ptr = method_ptr(touch_count);
     void* set_target_frame_rate_ptr = method_ptr(set_target_frame_rate);
     void* set_time_scale_ptr = method_ptr(set_time_scale);
     void* get_time_scale_ptr = method_ptr(get_time_scale);
 
-    LOGI("resolved: setLimitUp=%p clickNext=%p close=%p stopVoice=%p finishVoice=%p touchCount=%p",
-         set_limit_up_ptr, click_next_ptr, close_ptr, stop_voice_ptr, on_finish_voice_ptr,
-         touch_count_ptr);
     LOGI("resolved: framerate=%p timeScale=%p getTimeScale=%p",
          set_target_frame_rate_ptr, set_time_scale_ptr, get_time_scale_ptr);
 
-    if (set_limit_up_ptr != nullptr) {
-        if (DobbyHook(set_limit_up_ptr, reinterpret_cast<void*>(hook_set_limit_up),
-                      reinterpret_cast<void**>(&orig_set_limit_up)) == 0) {
-            LOGI("hooked SetLimitUpCombineInfo");
-        } else {
-            LOGE("failed to hook SetLimitUpCombineInfo");
-        }
-    }
-    if (close_ptr != nullptr) {
-        if (DobbyHook(close_ptr, reinterpret_cast<void*>(hook_close),
-                      reinterpret_cast<void**>(&orig_close)) == 0) {
-            LOGI("hooked Close");
-        } else {
-            LOGE("failed to hook Close");
-        }
-    }
-    if (touch_count_ptr != nullptr) {
-        if (DobbyHook(touch_count_ptr, reinterpret_cast<void*>(hook_get_touch_count),
-                      reinterpret_cast<void**>(&orig_get_touch_count)) == 0) {
-            LOGI("hooked get_touchCount");
-        } else {
-            LOGE("failed to hook get_touchCount");
-        }
-    }
     if (set_target_frame_rate_ptr != nullptr) {
         if (DobbyHook(set_target_frame_rate_ptr,
                       reinterpret_cast<void*>(hook_set_target_frame_rate),
@@ -306,6 +259,65 @@ void resolve_and_hook() {
         }
     } else {
         LOGE("failed to resolve Time::get_timeScale");
+    }
+
+    // The game assemblies load after the first scene, so wait for them before
+    // resolving the ascension component. Display hooks stay installed either way.
+    Il2CppClass* combine = nullptr;
+    Il2CppClass* input = nullptr;
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        combine = find_class(domain, "", "CombineResultEffectComponent");
+        input = find_class(domain, "UnityEngine", "Input");
+        if (combine != nullptr && input != nullptr) break;
+        usleep(250 * 1000);
+    }
+    if (combine == nullptr || input == nullptr) {
+        LOGE("failed to find game classes (combine=%p input=%p)", combine, input);
+        return;
+    }
+
+    MethodInfo* set_limit_up =
+        p_class_get_method_from_name(combine, "SetLimitUpCombineInfo", 10);
+    MethodInfo* click_next = p_class_get_method_from_name(combine, "clickNext", 0);
+    MethodInfo* close = p_class_get_method_from_name(combine, "Close", 0);
+    MethodInfo* stop_voice = p_class_get_method_from_name(combine, "stopVoice", 0);
+    MethodInfo* on_finish_voice = p_class_get_method_from_name(combine, "OnFinishVoice", 1);
+    MethodInfo* touch_count = p_class_get_method_from_name(input, "get_touchCount", 0);
+
+    void* set_limit_up_ptr = method_ptr(set_limit_up);
+    void* click_next_ptr = method_ptr(click_next);
+    void* close_ptr = method_ptr(close);
+    void* stop_voice_ptr = method_ptr(stop_voice);
+    void* on_finish_voice_ptr = method_ptr(on_finish_voice);
+    void* touch_count_ptr = method_ptr(touch_count);
+
+    LOGI("resolved: setLimitUp=%p clickNext=%p close=%p stopVoice=%p finishVoice=%p touchCount=%p",
+         set_limit_up_ptr, click_next_ptr, close_ptr, stop_voice_ptr, on_finish_voice_ptr,
+         touch_count_ptr);
+
+    if (set_limit_up_ptr != nullptr) {
+        if (DobbyHook(set_limit_up_ptr, reinterpret_cast<void*>(hook_set_limit_up),
+                      reinterpret_cast<void**>(&orig_set_limit_up)) == 0) {
+            LOGI("hooked SetLimitUpCombineInfo");
+        } else {
+            LOGE("failed to hook SetLimitUpCombineInfo");
+        }
+    }
+    if (close_ptr != nullptr) {
+        if (DobbyHook(close_ptr, reinterpret_cast<void*>(hook_close),
+                      reinterpret_cast<void**>(&orig_close)) == 0) {
+            LOGI("hooked Close");
+        } else {
+            LOGE("failed to hook Close");
+        }
+    }
+    if (touch_count_ptr != nullptr) {
+        if (DobbyHook(touch_count_ptr, reinterpret_cast<void*>(hook_get_touch_count),
+                      reinterpret_cast<void**>(&orig_get_touch_count)) == 0) {
+            LOGI("hooked get_touchCount");
+        } else {
+            LOGE("failed to hook get_touchCount");
+        }
     }
 
     g_click_next = click_next;
@@ -380,7 +392,9 @@ void* init_thread(void*) {
         LOGE("il2cpp_init was never called");
         return nullptr;
     }
-    sleep(2);
+    // Resolve immediately: the display hooks must be in place before the first
+    // scene applies its frame rate. resolve_and_hook waits for the game
+    // assemblies itself.
     resolve_and_hook();
     return nullptr;
 }
