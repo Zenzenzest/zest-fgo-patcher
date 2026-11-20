@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2 — 2026-11-20
+
+### Fixed
+
+- Fixed the startup black screen: blocking `FirebaseScript.Initialize` stalled the game's boot sequence. Firebase, analytics, and Crashlytics are now allowed to initialize, and only App Check provider/token errors are suppressed.
+- Re-enabled the `EntityScriptUtil.GetStringValue` name fixes (`Altria → Artoria`, `Tam Lin → Faerie Knight`); the startup stall was unrelated to this hook.
+- Rebuilt the native hook for arm64-v8a and armeabi-v7a.
+
+### Changed
+
+- Version bumped to 1.2 (code 3); signed with the same release key as 1.1.
+
 ## 1.1 — 2026-11-05
 
 ### Added

@@ -560,22 +560,9 @@ struct BlockSpec {
 };
 
 const BlockSpec kBlockSpecs[] = {
-    {"FirebaseScript", "Initialize", reinterpret_cast<void*>(block_firebase_initialize)},
     {"FirebaseScript", "SetupAppCheckProvider", reinterpret_cast<void*>(block_setup_appcheck)},
     {"FirebaseScript", "get_AppCheckTokenError", reinterpret_cast<void*>(block_get_appcheck_error)},
     {"FirebaseScript", "set_AppCheckTokenError", reinterpret_cast<void*>(block_set_appcheck_error)},
-    {"CrashReporter", "BacktraceSetAttributes", reinterpret_cast<void*>(block_bt_set_attributes)},
-    {"CrashReporter", "BacktraceStartUp", reinterpret_cast<void*>(block_bt_startup)},
-    {"CrashReporter", "BacktraceDisableSampling", reinterpret_cast<void*>(block_bt_disable_sampling)},
-    {"CrashReporter", "BacktraceEnableSampling", reinterpret_cast<void*>(block_bt_enable_sampling)},
-    {"CrashReporter", "BacktraceDisable", reinterpret_cast<void*>(block_bt_disable)},
-    {"CrashReporter", "BacktraceEnable", reinterpret_cast<void*>(block_bt_enable)},
-    {"CrashReporter", "CrashlyticsAddCustomKey", reinterpret_cast<void*>(block_crashlytics_key)},
-    {"AdManager", "InitializeRepro", reinterpret_cast<void*>(block_repro_init)},
-    {"AdManager", "SetUserId", reinterpret_cast<void*>(block_repro_user_id)},
-    {"AdManager", "SetFriendCode", reinterpret_cast<void*>(block_repro_friend_code)},
-    {"AdManager", "TrackEvent", reinterpret_cast<void*>(block_repro_track)},
-    {"AdManager", "SendPushRegistrationId", reinterpret_cast<void*>(block_repro_push)},
 };
 
 void install_telemetry(Il2CppDomain domain) {
@@ -796,6 +783,9 @@ void resolve_and_hook() {
 
     log_np_signatures(domain);
     install_np_skip(domain);
+    // AppCheck-only blocking: Firebase/analytics/Crashlytics must initialize
+    // (blocking them stalls startup), but the re-signed app cannot pass Play
+    // Integrity, so the AppCheck provider/token errors are suppressed.
     install_telemetry(domain);
 
     LOGI("hooks installed");
